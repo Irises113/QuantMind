@@ -29,9 +29,6 @@ const PROVIDERS: ProviderMeta[] = [
     defaultBaseUrlId: 'openai',
     models: [
       { label: 'deepseek-flash', value: 'deepseek-flash' },
-      { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
-      { label: 'deepseek-v4-pro', value: 'deepseek-v4-pro' },
-      { label: 'deepseek-v4-flash-vision-exp', value: 'deepseek-v4-flash-vision-exp' },
     ],
     defaultModel: 'deepseek-flash',
   },
