@@ -26,7 +26,7 @@ description: "智能策略选股 — 基于 QuantDB 数据的条件选股。在 
 
 ## 数据基础
 
-选股完全基于 **QuantDB** 本地 parquet（183 个字段映射，9 大数据源）：
+选股完全基于 **QuantDB** 本地 parquet。字段映射以后端字典为准：`backend/services/engine/ai_strategy/steps/step1_stock_selection.py`（DSL 字段 → QuantDB 表/列），覆盖以下数据源：
 
 | QuantDB 数据源 | 字段 | 覆盖 |
 |---|---|---|
@@ -80,7 +80,7 @@ CT="Content-Type: application/json"
 | `is_st` | 是否ST | — |
 | `listed_days` | 上市天数 | 天 |
 
-完整 184 个因子见前端 `electron/src/features/strategy-wizard/factors/dictionary.ts`（19 类：估值/价格/均线/技术/收益/波动/资金流/财务/概念/行业/筹码/融资融券/市场情绪/风格/指数成分等）。
+完整字段清单与映射以**后端字段字典为准**（`backend/services/engine/ai_strategy/steps/step1_stock_selection.py` + `api/schemas/stock_pool.py`）。⚠️ 前端 `electron/src/features/strategy-wizard/factors/dictionary.ts` 已移除，勿再引用。
 
 ## 2. 方式一：自然语言解析（推荐给用户用）
 
@@ -164,7 +164,7 @@ curl -s -X POST "$BASE/api/v1/strategy/query-pool" -H "$AUTH" -H "$CT" \
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 422 字段不匹配 | DSL 用了映射表外字段 | 用上面的常用因子名，或查 dictionary.ts |
+| 422 字段不匹配 | DSL 用了映射表外字段 | 用上面的常用因子名，或查后端字典 `step1_stock_selection.py` |
 | 选股结果为空 | 条件过严 | 放宽阈值，或去掉 AND 条件 |
 | summary.matchRate 极低 | 条件偏窄 | 检查 totalCandidates 是否正常 |
 | 想要全市场 | dsl 用 `SELECT symbol WHERE true` | 返回全部候选 |

@@ -106,7 +106,13 @@ QuantMind 单机 Docker Compose 部署（`docker-compose.yml`），11+ 服务：
 | `quantmind-data-gateway` | 数据网关          | —         | 行情/资金流聚合                    |
 | `quantmind-huntly`       | Huntly        | 8090      | RSS 新闻存储/阅读器                |
 | `quantmind-rsshub`       | RSSHub        | 1200      | 通用网站订阅                      |
-| `qwenpaw`                | QwenPaw       | —         | AI 代理（可选）                   |
+| `qwenpaw`                | QwenPaw       | 8088      | AI 代理（可选）；**默认仅绑 127.0.0.1**，外部直连需 `QWENPAW_BIND=0.0.0.0` |
+| `ib-gateway`             | IB Gateway    | 4001/4002 | 盈透网关（实盘/模拟，.env 配 IB_ACCOUNT/IB_PASSWORD） |
+
+> **QwenPaw 外部访问**：`qwenpaw` 端口默认只绑 `127.0.0.1`（安全收敛口径）。前端 QuantBot 页面用 iframe 直连
+> `http://<API网关主机>:8088/`，若在远端浏览器/Electron 打开需要在 `.env` 增加 `QWENPAW_BIND=0.0.0.0`，
+> 然后 `docker compose up -d qwenpaw`（**改端口映射必须 recreate，`restart` 不生效**），并在云安全组放行 8088
+> 且**限定来源 IP**（QwenPaw 为免登录模式）。仅容器内 `http://qwenpaw:8088` 互访则无需改动。
 
 ## 1. 部署前准备（重要，先做完再部署）
 

@@ -48,7 +48,7 @@ CT="Content-Type: application/json"
 
 ### 1.1 特征选择（筛选输入因子）
 ```bash
-# 获取特征字典（13 类 273 特征，含默认勾选）
+# 获取特征字典（类别/数量由 QuantDB l1_factors 动态生成，以接口返回为准）
 curl -s -H "$AUTH" "$BASE/api/v1/models/feature-catalog"
 
 # 带数据覆盖统计（含建议训练/验证/测试区间）
@@ -58,7 +58,7 @@ curl -s -H "$AUTH" "$BASE/api/v1/models/feature-catalog?include_coverage=true"
 curl -s -H "$AUTH" "$BASE/api/v1/admin/models/feature-catalog"
 ```
 选择特征 key 列表（如 `["mom_ret_5d", "vol_std_20"]`）或按类别（`feature_categories`）。
-特征类别：`ohlcv` / `valuation` / `momentum` / `volatility` / `liquidity` / `fundFlow` / `fundamental` / `style` / `industry` / `chip` / `concept` / `microstructure` / `sentiment`
+特征类别由后端特征目录**动态生成**，随 QuantDB `l1_factors` 数据版本变化（示例 version `20260831` 返回 10 类 110 特征：`momentum` / `fundamental` / `money_flow` / `style` / `technical` / `turnover` / `concept` / `volatility` / `chip` / `industry`）。**先读接口返回的 `categories[].id`，不要硬编码类别清单。**
 
 ### 1.2 训练目标（定义 T+N 标签口径）
 - `target_horizon_days`：预测周期（T+1 / T+5 / T+20 等）
@@ -100,13 +100,15 @@ curl -s -X POST "$BASE/api/v1/models/run-training" -H "$AUTH" -H "$CT" -d '{
   "deploy_to_production": false
 }'
 ```
-**支持的 model_type（15 种）**：
-- 树模型：`lightgbm` / `xgboost` / `catboost` / `linear` / `random_forest`
-- 深度学习：`gru` / `lstm` / `alstm` / `transformer` / `tabnet` / `tcn`
-- 自定义：`nativetft` / `mlp` / `hybrid_gru_tree`
+**支持的 model_type（13 种，以 `backend/shared/training/request.py::ALLOWED_MODEL_TYPES` 为准）**：
+- 树/线性：`lightgbm` / `xgboost` / `catboost` / `linear` / `random_forest`
+- 深度学习：`gru` / `lstm` / `alstm` / `transformer` / `tabnet` / `tcn` / `nativetft`
+- 其他：`mlp`（sklearn 实现）
+- ⚠️ `hybrid_gru_tree` 已剔除（QLIB map 无实现），**勿再传**（会被 422 拒绝/落入不支持）。
 
-**ensemble 取值**：`none` / `stacking` / `blending` / `voting`
-**可选高级参数**：`horizons`（多周期 T+1/T+5/T+20）、`optuna`（Optuna 自动超参搜索）、`n_folds`（交叉验证折数）、`wfa`（walk-forward）、`lgb_params`/`xgb_params`/`catboost_params`/`dl_params`（各模型专属超参）
+**ensemble 取值**：`none` / `stacking` / `blending` / `voting`（多模型训练时生效）
+**可选高级参数**：`wfa`（walk-forward，`rolling`/`expanding`）、`target_horizon_days`（单周期 T+N，1–30）、各模型专属超参 `lgb_params`/`xgb_params`/`catboost_params`/`dl_params`
+> ⚠️ 已下线/死配置：`horizons`（多周期，2026-09 随多周期训练一并清理）、`optuna`、`n_folds`（只建类型不参与序列化，传了不生效）。
 **返回**：`runId` + 有效/缺失特征统计
 
 ### 1.5 结果入库（查看元数据与产物）
@@ -124,11 +126,9 @@ curl -s -H "$AUTH" "$BASE/api/v1/models?include_archived=true"
 # 系统内置模型
 curl -s -H "$AUTH" "$BASE/api/v1/models/system-models"
 
-# 多模型融合
-curl -s -X POST "$BASE/api/v1/models/ensemble/create" -H "$AUTH" -H "$CT" -d '{
-  "name": "融合模型",
-  "model_ids": ["model1", "model2"]
-}'
+# ⚠️ 手工融合模型已下线：/api/v1/models/ensemble/create 路由不存在
+# （多周期 + 手工融合已于 2026-09 清理，见 backend/scripts/cleanup_multi_horizon_ensemble.py；
+#   仅在多模型训练时用 model_types + ensemble 合成，或保留历史融合模型做推理兼容）
 ```
 
 ## 2. 模型管理（管理端）
@@ -274,8 +274,7 @@ curl -s -H "$AUTH" "$BASE/api/v1/admin/data-platform/quality-alerts"
 ```
 
 ### 4.4 支持的字段类别（特征字典）
-通过 `/api/v1/models/feature-catalog` 获取，返回 13 个类别：
-`ohlcv`（基础行情）/ `valuation`（估值）/ `momentum`（动量）/ `volatility`（波动率）/ `liquidity`（流动性）/ `fundFlow`（资金流）/ `fundamental`（基本面）/ `style`（风格）/ `industry`（行业）/ `chip`（筹码）/ `concept`（概念）/ `microstructure`（微观结构）/ `sentiment`（情绪）
+通过 `/api/v1/models/feature-catalog` 获取。类别与特征数**由 QuantDB `l1_factors` 动态生成**（示例 version `20260831` 返回 10 类 110 特征），随数据版本变化——**以接口返回为准**，不要硬编码类别清单。
 
 ## 6. 推理研究（推理中心 + 推理历史）
 
@@ -453,7 +452,7 @@ curl -s -X POST -H "$AUTH" "$BASE/api/v1/news/sources/{source_id}/refresh"
 6. **需要训练**：先 `feature-catalog` 拿字段，再 `run-training`
 
 当用户要求**挖掘新因子**时，使用 [[rd-agent-factor-mining]] 技能（RD-Agent 自动演化管线）。
-当用户要求**按条件选股 / 筛选股票池**时，使用 [[smart-strategy-stock-picking]] 技能（基于 QuantDB 的 183 字段条件选股）。
+当用户要求**按条件选股 / 筛选股票池**时，使用 [[smart-strategy-stock-picking]] 技能（基于 QuantDB 字段字典的条件选股）。
 当用户要求**查询 QuantDB 数据 / 配置 API Key / 查看数据集字段**时，使用 [[quantdb-sdk]] 技能。
 当用户要求**深度分析市场 / 数据挖掘 / 导出分析数据 / 生成投研报告**时，使用 [[stock-market-analysis]] 技能。
 当用户要求**运行回测 / 对比策略 / 参数优化 / 分析回测结果**时，使用 [[backtest-center]] 技能。
@@ -465,7 +464,7 @@ curl -s -X POST -H "$AUTH" "$BASE/api/v1/news/sources/{source_id}/refresh"
 ## 9. 相关技能
 
 - **[[rd-agent-factor-mining]]** — 自动调用 RD-Agent 挖掘因子（evolve/tasks/factors/backtest/export）
-- **[[smart-strategy-stock-picking]]** — 基于 QuantDB 数据的条件选股（自然语言/条件/DSL 三种方式，183 字段）
+- **[[smart-strategy-stock-picking]]** — 基于 QuantDB 数据的条件选股（自然语言/条件/DSL 三种方式）
 - **[[quantdb-sdk]]** — QuantDB 数据 SDK（API Key 配置、28 数据集目录、字段查询、远程查询、同步）
 - **[[stock-market-analysis]]** — 市场深度分析 + 数据导出（全市场扫描/行业轮动/个股371字段/风险评分/CSV导出）
 - **[[backtest-center]]** — 回测中心（快速回测/专家模式/策略对比/参数优化/高级分析/向量化极速回测）

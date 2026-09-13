@@ -15,6 +15,9 @@ description: "QuantDB 服务器数据结构与读取口径 — 数据目录组�
 | 生产服务器宿主机 | `/opt/quantmind/data/quantdb` |
 | 容器内（`./data:/data` bind mount） | `/data/quantdb` |
 | 本地仓库 | `<项目根>/data/quantdb` |
+| **用户自定义数据集（产出区）** | `/data/quantcustom`（宿主机 `/opt/quantmind/data/quantcustom`） |
+
+> ⚠️ `quantdb/` 是**官方只读数据**；`quantcustom/` 是**用户/挖掘产出**（因子挖掘、因子工厂的落盘区，`QM_QUANTCUSTOM_DATA_DIR`）。两者结构同为 6 大类，但写入一律进 `quantcustom`，**不要污染 quantdb**。
 
 数据目录解析优先级（`quantdb_hub.py._resolve_data_dir`）：
 环境变量 `QM_QUANTDB_DATA_DIR` → `/data/quantdb` → `/app/data/quantdb` → `D:/quant_data` → 项目根 `data/quantdb`。
@@ -31,6 +34,18 @@ description: "QuantDB 服务器数据结构与读取口径 — 数据目录组�
 | `6_ml_datasets/` | features_daily、l1_factors、l2_factors、l1_l2_factors、alpha_library（Alpha101+GTJA191+Alpha158 三库因子） | 分区 |
 
 辅助文件：`releases/`（数据包版本）、`.sync_state` / `quantdb_sync.sqlite`（增量同步状态）、`.qlib_cache`、`_meta`。
+
+### 用户自定义数据集 `quantcustom/6_ml_datasets/`
+
+挖掘产物统一落 `data/quantcustom/6_ml_datasets/<数据集>/`（结构与 `quantdb` 一致，按 `dt=YYYYMMDD/` 分区）：
+
+| 数据集 | 来源 | 附加文件 |
+|---|---|---|
+| `l1_factors` | ① RD-Agent 因子 `export` ② **因子工厂**（`backend/scripts/factor_factory.py`） | `MANIFEST.csv`（factor_name/expression/ic/icir/coverage/kept）、`PROPOSALS.json` |
+
+- 读取入口：`QuantDBFactorReader(mode="CUSTOM")`（`QM_QUANTCUSTOM_DATA_DIR`，默认 `/data/quantcustom`）。
+- 只读展示：`GET /api/v1/alpha-agent/factory-factors`（读 `l1_factors/MANIFEST.csv`，只回显不回测）。
+- 历史补全/落库路径：`backend/services/api/routers/admin/alpha_factor_pipeline.py`。
 
 ## 三、文件组织规律（决定查询写法）
 

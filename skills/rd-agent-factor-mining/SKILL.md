@@ -90,6 +90,26 @@ python3 scripts/alpha_agent/factor_pipeline.py --check-env
 
 一个方向跑完约 **30–90 分钟**（数据管线 + LLM 演化 + 逐因子回测）。
 
+## 1.5 因子工厂（QuantDB 富字段 × 算子 × 窗口 → 成千上万表达式因子）
+
+R&D-Agent 是「LLM 提假设 → 逐因子回测」；**因子工厂**是「系统性批量衍生」：拿 QuantDB 的几百个数值字段
+（`l1_factors` / `features_daily`）做算子 × 窗口 × 二元组合，全量算 IC/ICIR、相关性去重，产出可训练 parquet。
+适合「数据面已知、想从海量式子里筛好货」。两者互补，可都跑。
+
+```bash
+# 容器内执行（重依赖 duckdb/pandas，QwenPaw 本地 venv 跑不了）
+docker exec -w /app quantmind python /app/backend/scripts/factor_factory.py \
+  --start-date 2025-09-01 --end-date 2026-08-31 --top-n 200
+# 冒烟（小样本，先验证环境）
+docker exec -w /app quantmind python /app/backend/scripts/factor_factory.py --smoke
+```
+
+- **产物**：`data/quantcustom/6_ml_datasets/l1_factors/dt=YYYYMMDD/data.parquet`（列：`symbol`(后缀式) + `date` + OHLCV + 因子 float32）、`MANIFEST.csv`、`PROPOSALS.json`。
+- **关键参数**：`--windows 5,10,20,60`、`--ops tsrank,tsstd,roc,zscore,delta,decay,slope`、`--cs-ops csrank,cszscore`、`--binary-ops csdiff,csratio,tscorr`、`--top-n 200`、`--pool-factor 3.0`、`--corr-threshold 0.85`、`--jobs 0`（自动并行）、`--compression zstd`、`--out`。
+- **只读展示**：`GET /api/v1/alpha-agent/factory-factors`（读 MANIFEST，前端因子库加「工厂」徽标，仅展示不回测/训练操作）。
+- **训练侧读取**：`QuantDBFactorReader(mode="CUSTOM")`（`QM_QUANTCUSTOM_DATA_DIR`）。
+- 落盘/目录口径见 [[quantdb-data-structure]] 的 `quantcustom` 小节。
+
 ## 2. 手动分步（需要精细控制时用 API）
 
 ### 认证
@@ -188,3 +208,4 @@ curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/stats"                             
 - 一键管线：`scripts/alpha_agent/factor_pipeline.py`
 - 环境修复：`docker/conda-shim`、`docker/litellm_sitecustomize.py`（compose 挂载固化）
 - RD-Agent Runner 入口：`scripts/alpha_agent/run_rd_agent.py`
+- 因子工厂：`backend/scripts/factor_factory.py`（+ `backend/scripts/alpha_library_factors.py` 复用算子/写盘）

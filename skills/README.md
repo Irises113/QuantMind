@@ -75,8 +75,9 @@ cp -r skills/<skill-name> ~/.claude/skills/
 
 ## 关联网关容器
 
-- 富途 OpenD 网关：`docker compose up -d futu-opend`（官方原包，API 端口 11111）
+- 富途 OpenD 网关：compose **未内置**该服务，按 [install-futu-opend](install-futu-opend/) 在本地/服务器安装启动（API 端口 11111）
 - IB Gateway：`docker compose up -d ib-gateway`（.env 配置 IB_ACCOUNT/IB_PASSWORD，端口 4001=实盘 / 4002=模拟）
+- QwenPaw（QuantBot）：`docker compose up -d qwenpaw`，端口 8088 **默认仅绑定 127.0.0.1**；需外部（浏览器/Electron）直连时在 `.env` 设 `QWENPAW_BIND=0.0.0.0` 并配合安全组限制来源 IP
 
 ## 技能开发约定
 

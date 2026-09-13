@@ -178,7 +178,7 @@ P.append(("futuapi", "富途 OpenAPI 助手", "券商 SDK",
 P.append(("install-futu-opend", "安装富途 OpenD", "券商 SDK",
     "富途 OpenD 网关下载/安装/启动、futu-api SDK 升级",
     "安装结果",
-    """请帮我安装/启动富途 OpenD 网关：{本机安装 / Docker 运行（docker compose up -d futu-opend）/ 升级 futu-api SDK}。
+    """请帮我安装/启动富途 OpenD 网关：{本机安装 / 服务器安装 / 升级 futu-api SDK}。
 
 请读取 skills/install-futu-opend/SKILL.md 并按流程执行，完成后验证 OpenD 连接（端口 11111）可用。"""))
 

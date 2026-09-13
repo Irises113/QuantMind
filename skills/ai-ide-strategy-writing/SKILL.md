@@ -35,6 +35,32 @@ AUTH="Authorization: Bearer $TOKEN"
 CT="Content-Type: application/json"
 ```
 
+## 0. AI 服务（LLM）配置与自定义请求头
+
+AI-IDE / QuantAgent / QuantBot 的 LLM 通道统一走「个人中心 → AI 服务」配置（持久化在 `user_profiles`）：
+
+```bash
+# 读取当前配置（api_key 已脱敏）
+curl -s -H "$AUTH" "$BASE/api/v1/ai-ide/config/llm"
+
+# 保存配置（自定义网关/模型：可带自定义请求头）
+curl -s -X POST -H "$AUTH" -H "$CT" "$BASE/api/v1/ai-ide/config/llm" -d '{
+  "provider": "custom",
+  "model": "your-model",
+  "base_url": "https://your-gateway.example.com",
+  "qwen_api_key": "sk-...",
+  "extra_headers": "{\"x-opencode-session\": \"<session-id>\"}"
+}'
+
+# 测试连通（字段同上）
+curl -s -X POST -H "$AUTH" -H "$CT" "$BASE/api/v1/ai-ide/config/llm/test" -d '{ ... }'
+```
+
+- **`extra_headers`**：自定义请求头（JSON 字符串），存 `user_profiles.llm_extra_headers`，会注入到全部 LLM 调用
+  （AI-IDE/QuantAgent、QuantBot、策略 Lab、`ai_strategy` 等）。`None`=不改动，空串=清除，有值=覆盖。
+- **`base_url`**：只填到域名即可，客户端会自动补 `/v1/chat/completions`（例：`https://api.deepseek.com` → `https://api.deepseek.com/v1/chat/completions`）。
+- 注意：RD-Agent 子进程用的是自建网关，**不会**自动带上这里的 `extra_headers`（litellm 不读该变量），需要本地反向代理或单独 patch。
+
 ## 1. 运行策略 / 回测（核心）
 
 AI-IDE 通过 Docker 容器执行策略代码。策略分三种模式自动识别：

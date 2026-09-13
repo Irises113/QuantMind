@@ -47,22 +47,25 @@ run-training → submit_training_job → LocalDockerOrchestrator
   → deploy_to_production 决定是否入生产
 ```
 
-### 模型类型（15 种）
+### 模型类型（13 种）
 
 | 类别 | 模型 |
 |---|---|
-| 树模型 | lightgbm / xgboost / catboost / linear / random_forest |
-| 深度学习 | gru / lstm / alstm / transformer / tabnet / tcn |
-| 自定义 | nativetft / mlp / hybrid_gru_tree |
+| 树/线性 | lightgbm / xgboost / catboost / linear / random_forest |
+| 深度学习 | gru / lstm / alstm / transformer / tabnet / tcn / nativetft |
+| 其他 | mlp（sklearn） |
+
+> `hybrid_gru_tree` 已剔除（QLIB map 无实现）；以 `backend/shared/training/request.py::ALLOWED_MODEL_TYPES` 为准。
 
 **集成法**：none / stacking / blending / voting
-**参数**：features(≤300)、target_horizon_days(1-30)、horizons(多周期)、target_mode(return/classification)、lgb/xgb/catboost/dl_params、n_folds、optuna（超参搜索）、wfa（walk-forward）
+**参数**：features(≤300)、target_horizon_days(1-30)、target_mode(return/classification)、lgb/xgb/catboost/dl_params、wfa（walk-forward）
+> 已下线/死配置：`horizons`（多周期，2026-09 清理）、`optuna`、`n_folds`（不参与序列化）。
 
 ### 关键 payload 字段
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `model_type` | lightgbm | 上述 15 种 |
+| `model_type` | lightgbm | 上述 13 种 |
 | `model_types` | — | 多模型列表（ensemble 用） |
 | `ensemble` | none | none/stacking/blending/voting |
 | `features` | [] | 特征 key 列表（从 feature-catalog 取，≤300） |
@@ -77,7 +80,7 @@ run-training → submit_training_job → LocalDockerOrchestrator
 - **用户模型**：`/api/v1/models`（用户态 CRUD）
 - **市场分段**：model_id=`mdl_{market_lower}_{run}_{digest}`，非CN存 `models/users/{tenant}/{user}/{market_lower}/`，market∈CN/a_share、HK、US、CRYPTO、FUTURES
 - **系统模型回退**：系统内置 `model_qlib/alpha158` 已废弃，不再有隐式回退
-- **融合模型**：`/api/v1/models/ensemble/create` 百分位加权合成；目录含 `ensemble_config.json` + `inference.py`；无 pred 时 `generate_ensemble_pred` 自动用子模型 pred 融合生成
+- **融合模型**：`/api/v1/models/ensemble/create` 已下线（路由不存在）；多周期 + 手工融合于 2026-09 清理（`backend/scripts/cleanup_multi_horizon_ensemble.py`）。仅保留历史融合模型的推理兼容（`ensemble_config.json` / `inference_ensemble_src.py`）
 
 ## 推理链路
 

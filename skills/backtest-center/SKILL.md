@@ -86,10 +86,7 @@ curl -s -H "$AUTH" "$BASE/api/v1/admin/models/list-for-backtest"
 # 启动模型滚动回测
 curl -s -X POST -H "$AUTH" -H "$CT" "$BASE/api/v1/admin/models/backtest" \
   -d '{"model_id":"mdl_xxx","start":"2025-01-01","end":"2025-12-31"}'
-
-# 多周期对比回测
-curl -s -X POST -H "$AUTH" -H "$CT" "$BASE/api/v1/admin/models/backtest/multi-horizon" \
-  -d '{"model_id":"mdl_xxx","horizons":[1,5,20],"start":"2025-01-01","end":"2025-12-31"}'
+# ⚠️ 多周期对比回测已下线：/api/v1/admin/models/backtest/multi-horizon 路由不存在（2026-09 清理）
 ```
 
 ### 1.3 推理回测（选股策略事件驱动）
@@ -150,11 +147,9 @@ curl -s -X DELETE -H "$AUTH" "$BASE/api/v1/admin/models/backtest/history/{model_
 curl -s -H "$AUTH" "$BASE/api/v1/qlib/compare/{id1}/{id2}"
 ```
 
-### 4.2 多模型对比回测（多周期）
-```bash
-curl -s -X POST -H "$AUTH" -H "$CT" "$BASE/api/v1/admin/models/backtest/multi-horizon" \
-  -d '{"model_ids":["mdl_a","mdl_b"],"start":"2025-01-01","end":"2025-12-31"}'
-```
+### 4.2 多模型对比
+
+多周期对比回测（`/api/v1/admin/models/backtest/multi-horizon`）已于 2026-09 下线；多策略/多模型对比改用 `compare`（结果级）或在训练侧按单周期分别训练模型再各自回测。
 
 ## 5. 参数优化（遗传算法）
 
@@ -264,7 +259,7 @@ curl -s -H "$AUTH" "$BASE/api/v1/qlib/export/{backtest_id}/excel" -o backtest_re
 3. **运行回测**：`/admin/models/backtest` 或 `/qlib/backtest`
 4. **查日志**：`/qlib/logs/{id}` 确认完成
 5. **深度分析**：`/qlib/analysis/*` + `/qlib/risk/{id}/metrics`
-6. **对比**：多策略用 compare / multi-horizon
+6. **对比**：多策略用 compare（结果级对比）
 7. **导出**：PDF / Excel 报告
 8. **参数调优**：`/qlib/optimize` 遗传算法搜索最优参数
 
