@@ -32,28 +32,22 @@ def generate_data_folder_from_qlib(use_local: bool = True):
     assert daily_pv_all.exists(), "daily_pv_all.h5 is not generated."
     assert daily_pv_debug.exists(), "daily_pv_debug.h5 is not generated."
 
-    # 创建数据目录并复制文件
+    # 创建数据目录并复制文件（仅当目标不存在时才复制：
+    # QuantDB 已在 _ensure_data_file 生成富化 daily_pv.h5，不能被内置模板覆盖）
     logger.info(f"复制生成的数据文件到工作目录")
-    Path(FACTOR_COSTEER_SETTINGS.data_folder).mkdir(parents=True, exist_ok=True)
-    shutil.copy(
-        daily_pv_all,
-        Path(FACTOR_COSTEER_SETTINGS.data_folder) / "daily_pv.h5",
-    )
-    shutil.copy(
-        Path(__file__).parent / "factor_data_template" / "README.md",
-        Path(FACTOR_COSTEER_SETTINGS.data_folder) / "README.md",
-    )
+    _readme_src = Path(__file__).parent / "factor_data_template" / "README.md"
+    for folder, src in (
+        (FACTOR_COSTEER_SETTINGS.data_folder, daily_pv_all),
+        (FACTOR_COSTEER_SETTINGS.data_folder_debug, daily_pv_debug),
+    ):
+        Path(folder).mkdir(parents=True, exist_ok=True)
+        tgt = Path(folder) / "daily_pv.h5"
+        if tgt.exists() or tgt.is_symlink():
+            logger.info(f"daily_pv.h5 already exists, skip copy: {tgt}")
+        else:
+            shutil.copy(src, tgt)
+        shutil.copy(_readme_src, Path(folder) / "README.md")
 
-    Path(FACTOR_COSTEER_SETTINGS.data_folder_debug).mkdir(parents=True, exist_ok=True)
-    shutil.copy(
-        daily_pv_debug,
-        Path(FACTOR_COSTEER_SETTINGS.data_folder_debug) / "daily_pv.h5",
-    )
-    shutil.copy(
-        Path(__file__).parent / "factor_data_template" / "README.md",
-        Path(FACTOR_COSTEER_SETTINGS.data_folder_debug) / "README.md",
-    )
-    
     logger.info(f"数据准备完成")
     
 
