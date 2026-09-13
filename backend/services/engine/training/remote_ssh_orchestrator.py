@@ -296,9 +296,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                         "python /app/backend/scripts/quantdb_daily_sync.py",
                     )
                 quoted_dir = shlex.quote(self.quantdb_dir)
+                # 只同步训练实际请求的因子源（factor_source），避免每次把 l2/l1_l2 等
+                # 无关数据集全量拉取（几 GB、拖慢冒烟/训练启动）。
+                sync_datasets = direct_source or "l1_factors"
                 code, out, err = await self._ssh_exec(
                     f"mkdir -p {quoted_dir} && QM_QUANTDB_DATA_DIR={quoted_dir} "
-                    f"{sync_cmd} --parquet-only --datasets l1_factors,l2_factors,l1_l2_factors",
+                    f"{sync_cmd} --parquet-only --datasets {sync_datasets}",
                     timeout=1800,
                 )
                 if code != 0:
