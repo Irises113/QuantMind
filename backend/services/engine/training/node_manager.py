@@ -254,25 +254,27 @@ class NodeStatus:
 
     _SSH_TIMEOUT = 15
     _COLLECT_CMD = r"""
-set -e
 echo "===SYS==="
 nproc
 uptime
-echo "mem:$(free -m | grep -iE 'mem|内存' | awk '{print $2, $3}')"
+echo "mem:$(free -m | awk 'NR==2{print $2, $3}')"
 echo "disk:$(df -P / | awk 'NR==2{print $2, $3}')"
-echo "net:$(cat /proc/net/dev | awk '/eth0|ens|enp/{gsub(/:/,\"\"); rx+=$2; tx+=$10} END{print rx, tx}')"
 echo "rx1:$(cat /sys/class/net/*/statistics/rx_bytes 2>/dev/null | awk '{s+=$1} END{print s+0}')"
 echo "tx1:$(cat /sys/class/net/*/statistics/tx_bytes 2>/dev/null | awk '{s+=$1} END{print s+0}')"
 echo "===GPU==="
 if command -v nvidia-smi >/dev/null 2>&1; then
-  nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name --format=csv,noheader,nounits 2>&1 || echo "gpu-error"
+  nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name --format=csv,noheader,nounits 2>/dev/null || echo "gpu-error"
 else
   echo "no-gpu"
 fi
 echo "===DOCKER==="
-docker ps --filter name=qm-train- --format '{{.Names}}|{{.Status}}' 2>/dev/null || echo "no-docker"
+if command -v docker >/dev/null 2>&1; then
+  docker ps --filter name=qm-train- --format '{{.Names}}|{{.Status}}' 2>/dev/null || echo "no-docker"
+else
+  echo "no-docker"
+fi
 echo "===NET==="
-cat /proc/loadavg 2>/dev/null | awk '{print $1}'
+awk '{print $1}' /proc/loadavg 2>/dev/null
 """
 
     @staticmethod
@@ -282,8 +284,10 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
             args += ["sshpass", "-p", node["ssh_password"]]
         args += ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10"]
         args += ["-p", str(node.get("port") or 22)]
-        if node.get("ssh_key"):
-            args += ["-i", node["ssh_key"]]
+        key = str(node.get("ssh_key") or "").strip()
+        # 容器内若配置了 Windows 本机路径，-i 会直接失败；有密码时跳过无效密钥。
+        if key and Path(key).exists():
+            args += ["-i", key]
         args.append(f"{node.get('user') or 'root'}@{node['host']}")
         return args
 
@@ -294,6 +298,8 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
             "id": node.get("id"),
             "name": node.get("name") or node.get("id"),
             "host": node.get("host"),
+            "type": "remote",
+            "exec_mode": node.get("exec_mode") or "native_python",
             "online": False,
         }
         proc = await asyncio.create_subprocess_exec(
@@ -329,8 +335,8 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
         out = stdout.decode(errors="replace")
         return cls._parse(out, result)
 
-    @staticmethod
-    def _parse(out: str, result: dict[str, Any]) -> dict[str, Any]:
+    @classmethod
+    def _parse(cls, out: str, result: dict[str, Any]) -> dict[str, Any]:
         result["online"] = True
         sections: dict[str, str] = {}
         current = None
@@ -414,8 +420,9 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
 
         # 网络延迟：ping 一次网关（尽力而为）
         result["ping_ms"] = None
-        result = cls.assess_readiness(result)
-        return result
+        # 不要写 cls：历史上 _parse 曾被标成 staticmethod，cls 未定义会导致
+        # collect_all 吞掉远程节点，前端永久显示「未连接」。
+        return NodeStatus.assess_readiness(result)
 
     @classmethod
     async def collect_local(cls) -> dict[str, Any]:
@@ -670,10 +677,28 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
             tasks.append(cls.collect(n))
         results = await asyncio.gather(*tasks, return_exceptions=True)
         out: list[dict[str, Any]] = []
-        for r in results:
+        for i, r in enumerate(results):
             if isinstance(r, dict):
                 out.append(r)
-            elif isinstance(r, Exception):
-                logger.warning("采集节点状态异常: %s", r)
+                continue
+            logger.warning("采集节点状态异常: %s", r)
+            if i == 0:
+                out.append({
+                    "id": "local",
+                    "name": "本地 Docker",
+                    "online": False,
+                    "readiness": "offline",
+                    "readiness_label": "离线 / 未连接",
+                    "error": str(r),
+                })
+            else:
+                n = nodes[i - 1]
+                out.append(cls.assess_readiness({
+                    "id": n.get("id"),
+                    "name": n.get("name") or n.get("id"),
+                    "host": n.get("host"),
+                    "online": False,
+                    "error": str(r),
+                }))
         return out
 
