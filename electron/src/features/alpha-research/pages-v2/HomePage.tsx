@@ -37,6 +37,16 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   // 任务激活 = 正在提交（POST /evolve 进行中）或后端任务运行中
   const taskActive = miningStarting || task?.status === 'running';
 
+  // 「AI 因子挖掘」入口：有任务（运行中/已完成）才进演化台；
+  // 无任务时滚动到输入框，避免打开空的进度页。
+  const handleOpenDashboard = () => {
+    if (task) {
+      onNavigate?.('mining_dashboard');
+    } else {
+      document.getElementById('mining-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
   useEffect(() => {
     getDataSummary()
       .then((res) => setDataSummary(res.data ?? null))
@@ -92,7 +102,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
         </div>
 
         {/* ================= 2. Central Integrated Prompt Input ================= */}
-        <div className="w-full flex flex-col gap-3">
+        <div id="mining-input" className="w-full flex flex-col gap-3">
           {/* 运行中任务进度提示 + 提交锁（避免重复提交） */}
           {taskActive && (
             <div className="w-full max-w-4xl mx-auto flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-2.5 shadow-2xs">
@@ -173,7 +183,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full">
           {/* AI 因子挖掘 */}
           <div
-            onClick={() => onNavigate?.('mining_dashboard')}
+            onClick={handleOpenDashboard}
             className="group relative bg-white/80 hover:bg-white backdrop-blur-xl rounded-2xl p-5 border border-white/90 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col items-center text-center"
           >
             <div className="absolute top-4 left-4 w-10 h-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100 flex items-center justify-center text-blue-600 group-hover:scale-105 transition-transform">

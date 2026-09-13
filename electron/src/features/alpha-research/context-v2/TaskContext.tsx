@@ -19,6 +19,7 @@ import {
   startMining as apiStartMining,
   getMiningStatus,
   cancelMining as apiCancelMining,
+  listTasks,
   startBacktest as apiStartBacktest,
   getBacktestStatus,
   cancelBacktest as apiCancelBacktest,
@@ -109,6 +110,8 @@ interface TaskContextValue {
   miningTask: Task | null;
   /** POST /evolve 提交进行中（后端同步建缓存时可能耗时较长） */
   miningStarting: boolean;
+  /** 用户主动开始挖掘的序号（仅用于「开始后自动进入演化台」，恢复历史任务不触发） */
+  miningStartSeq: number;
   miningEquityCurve: TimeSeriesData[];
   miningDrawdownCurve: TimeSeriesData[];
   miningIcTimeSeries: TimeSeriesData[];
@@ -144,6 +147,8 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // 任务提交锁：POST /evolve 进行中（数据源为 parquet 时后端同步建缓存可能耗时 1 分钟+），
   // 期间禁止重复提交
   const [miningStarting, setMiningStarting] = useState(false);
+  const [miningStartSeq, setMiningStartSeq] = useState(0);
+  const miningStartSeqRef = useRef(0);
   const [miningEquityCurve, setMiningEquityCurve] = useState<TimeSeriesData[]>([]);
   const [miningDrawdownCurve, setMiningDrawdownCurve] = useState<TimeSeriesData[]>([]);
   const [miningIcTimeSeries, setMiningIcTimeSeries] = useState<TimeSeriesData[]>([]);
@@ -299,6 +304,69 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [],
   );
 
+  // 绑定某个挖掘任务的实时传输（WebSocket + 轮询兜底），供新任务与恢复共用
+  const bindMiningTransport = useCallback(
+    (taskId: string) => {
+      if (miningWsTimeoutRef.current) {
+        clearTimeout(miningWsTimeoutRef.current);
+        miningWsTimeoutRef.current = null;
+      }
+      miningWsRef.current?.close();
+      miningWsRef.current = null;
+      if (miningPollingRef.current) {
+        clearInterval(miningPollingRef.current);
+        miningPollingRef.current = null;
+      }
+      const ws = connectMiningWs(taskId, handleMiningWsMessage, () => {
+        if (!mountedRef.current) return;
+        getMiningStatus(taskId).then((r) => {
+          if (r.data?.task && mountedRef.current) setMiningTask(r.data.task as Task);
+        });
+      });
+      miningWsRef.current = ws;
+      miningWsTimeoutRef.current = (ws as any)._pollingTimeoutId ?? null;
+      miningPollingRef.current = setInterval(async () => {
+        if (!mountedRef.current) {
+          clearInterval(miningPollingRef.current!);
+          miningPollingRef.current = null;
+          return;
+        }
+        try {
+          const r = await getMiningStatus(taskId);
+          if (!mountedRef.current) return;
+          if (r.data?.task) {
+            const t = r.data.task as Task;
+            if (t.status === 'completed' || t.status === 'failed') {
+              setMiningTask(t);
+              clearInterval(miningPollingRef.current!);
+              miningPollingRef.current = null;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }, 10000);
+    },
+    [handleMiningWsMessage],
+  );
+
+  // 恢复：刷新/离开再回来时，若后端仍有运行中的挖掘任务，重新绑定并展示进度
+  const miningRecoveredRef = useRef(false);
+  useEffect(() => {
+    if (miningRecoveredRef.current) return;
+    miningRecoveredRef.current = true;
+    listTasks()
+      .then((r) => {
+        if (!mountedRef.current || miningTaskRef.current) return;
+        const running = (r.data?.tasks ?? []).find((t) => t.status === 'running');
+        if (running) {
+          setMiningTask(running);
+          bindMiningTransport(running.taskId);
+        }
+      })
+      .catch(() => {});
+  }, [bindMiningTransport]);
+
   // Start mining (real backend)
   const startRealMining = useCallback(
     async (config: TaskConfig) => {
@@ -343,48 +411,15 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
             taskData.metrics.lowQualityFactors = 0;
         }
         setMiningTask(taskData);
+        miningStartSeqRef.current += 1;
+        setMiningStartSeq(miningStartSeqRef.current);
         setMiningEquityCurve([]);
         setMiningDrawdownCurve([]);
         setMiningIcTimeSeries([]);
         miningDataPointsRef.current = 0;
 
-        // WebSocket
-        const ws = connectMiningWs(
-          resp.data.taskId,
-          handleMiningWsMessage,
-          () => {
-            if (!mountedRef.current) return;
-            getMiningStatus(resp.data!.taskId).then((r) => {
-              if (r.data?.task && mountedRef.current) setMiningTask(r.data.task as Task);
-            });
-          },
-        );
-        miningWsRef.current = ws;
-        // Track the recursive setTimeout from connectMiningWs for cleanup
-        miningWsTimeoutRef.current = (ws as any)._pollingTimeoutId ?? null;
-
-        // Polling fallback
-        miningPollingRef.current = setInterval(async () => {
-          if (!mountedRef.current) {
-            clearInterval(miningPollingRef.current!);
-            miningPollingRef.current = null;
-            return;
-          }
-          try {
-            const r = await getMiningStatus(resp.data!.taskId);
-            if (!mountedRef.current) return;
-            if (r.data?.task) {
-              const t = r.data.task as Task;
-              if (t.status === 'completed' || t.status === 'failed') {
-                setMiningTask(t);
-                clearInterval(miningPollingRef.current!);
-                miningPollingRef.current = null;
-              }
-            }
-          } catch {
-            // ignore
-          }
-        }, 10000);
+        // 绑定 WebSocket + 轮询兜底
+        bindMiningTransport(resp.data.taskId);
       } catch (err: any) {
         console.error('Failed to start mining task:', err);
         // Set error state instead of falling back to mock data
@@ -413,7 +448,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setMiningStarting(false);
       }
     },
-    [handleMiningWsMessage],
+    [bindMiningTransport],
   );
 
   // Public start mining
@@ -609,6 +644,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Mining
     miningTask,
     miningStarting,
+    miningStartSeq,
     miningEquityCurve,
     miningDrawdownCurve,
     miningIcTimeSeries,

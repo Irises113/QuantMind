@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { HomePage } from '../pages-v2/HomePage';
 import { MiningDashboardPage } from '../pages-v2/MiningDashboardPage';
 import { FactorLibraryPage } from '../pages-v2/FactorLibraryPage';
@@ -12,19 +12,17 @@ import { TaskProvider, useTaskContext } from '../context-v2/TaskContext';
 // Inner component to access context
 const AppContent: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<PageId>('home');
-  const { miningTask } = useTaskContext();
+  const { miningStartSeq } = useTaskContext();
 
-  // Auto-switch to dashboard when task starts
+  // 仅当用户「主动开始」一次挖掘时自动进入演化台；
+  // 恢复历史/运行中任务（刷新或离开再回来）不触发，避免被强制带走。
+  const lastStartSeqRef = useRef(miningStartSeq);
   useEffect(() => {
-    if (miningTask && miningTask.status === 'running' && currentPage === 'home') {
-       // Only auto-redirect if we are on home and a new task starts
-       // But wait, user requirement says: "Don't disconnect when going back to home"
-       // So we should redirect to dashboard ONLY when a NEW task is created via ChatInput
-       // The ChatInput in HomePage calls startMining.
-       // We can detect this change.
-       setCurrentPage('mining_dashboard');
+    if (miningStartSeq !== lastStartSeqRef.current) {
+      lastStartSeqRef.current = miningStartSeq;
+      setCurrentPage('mining_dashboard');
     }
-  }, [miningTask?.taskId]); // Only trigger on new task ID
+  }, [miningStartSeq]);
 
   return (
     <>
