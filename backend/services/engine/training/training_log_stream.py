@@ -188,7 +188,17 @@ class TrainingRunLogStream:
             return
 
         now_iso = datetime.now(timezone.utc).isoformat()
+        prev: dict[str, Any] = {}
+        try:
+            raw_prev = client.get(self._state_key(run_id))
+            if raw_prev:
+                parsed = json.loads(self._decode(raw_prev))
+                if isinstance(parsed, dict):
+                    prev = parsed
+        except Exception:
+            prev = {}
         state: dict[str, Any] = {
+            **prev,
             "run_id": str(run_id),
             "tenant_id": str(tenant_id or "default"),
             "user_id": str(user_id or ""),

@@ -159,6 +159,12 @@ def load_data(
             range_start = max(range_start, pd.Timestamp(_status.min_date))
         if _status.max_date:
             range_end = min(range_end, pd.Timestamp(_status.max_date))
+        logger.info(
+            "Direct QuantDB read %s: requesting %s .. %s",
+            direct_factor_source,
+            range_start.date(),
+            range_end.date(),
+        )
         df = reader.read_range(
             direct_factor_source,
             features=features,

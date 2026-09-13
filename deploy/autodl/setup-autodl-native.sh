@@ -14,7 +14,7 @@
 #   AUTODL_RESYNC       1=已有数据时仍做增量同步
 #   AUTODL_SINCE        YYYY-MM-DD，默认三年前；full=不裁剪
 #   AUTODL_DATASETS     逗号分隔，默认 l1_factors
-#   PIP_INDEX           默认阿里云 PyPI
+#   PIP_INDEX           默认清华 PyPI
 #   PYTHON_BIN / WORK_DIR / QUANTDB_DIR / ENV_FILE
 set -euo pipefail
 
@@ -28,8 +28,8 @@ WORK_DIR="${WORK_DIR:-/root/workspace}"
 QUANTDB_DIR="${QUANTDB_DIR:-/root/autodl-fs/quantdb}"
 ENV_FILE="${ENV_FILE:-/etc/profile.d/quantmind_sh.sh}"
 NODE_ENV_FILE="${NODE_ENV_FILE:-$WORK_DIR/.env}"
-PIP_INDEX="${PIP_INDEX:-https://mirrors.aliyun.com/pypi/simple/}"
-PIP_HOST="${PIP_TRUSTED_HOST:-mirrors.aliyun.com}"
+PIP_INDEX="${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple/}"
+PIP_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
 DEFAULT_DATASETS="${AUTODL_DATASETS:-l1_factors}"
 
 is_noninteractive() {

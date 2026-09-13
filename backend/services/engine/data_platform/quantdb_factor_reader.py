@@ -535,7 +535,9 @@ class QuantDBFactorReader:
                 f"SELECT {', '.join(selected)} FROM {from_clause} "
                 f"WHERE {date_expr} BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)"
             )
+            logger.info("QuantDB DuckDB scanning %s from %s to %s", source, start_s, end_s)
             frame = con.execute(sql, [start_s, end_s]).fetchdf()
+            logger.info("QuantDB DuckDB returned %d rows for %s", len(frame), source)
         finally:
             con.close()
         frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")

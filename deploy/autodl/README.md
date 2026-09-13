@@ -65,7 +65,7 @@ AUTODL_RESYNC=1 QUANTDB_API_KEY=qdb_xxx bash setup-autodl-native.sh
 | `AUTODL_RESYNC` | 0 | `1` 时已有数据仍增量 |
 | `AUTODL_SINCE` | `3-year` | `YYYY-MM-DD` 或 `full` |
 | `AUTODL_DATASETS` | `l1_factors` | 逗号分隔，如 `l1_factors,l2_factors` |
-| `PIP_INDEX` | 阿里云 PyPI | 国内源 |
+| `PIP_INDEX` | 清华 PyPI | 国内源，可用 `PIP_INDEX` 改阿里云等 |
 
 ## 环境变量持久化
 

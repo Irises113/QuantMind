@@ -18,6 +18,8 @@ import logging
 import os
 import shlex
 import tempfile
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -48,8 +50,10 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
       TRAINING_AUTODL_NODE_NAME     节点标识（默认 autodl-1）
     """
 
-    _POLL_INTERVAL = 10  # 容器状态轮询间隔（秒）
-    _LOG_TAIL_LINES = 60
+    _POLL_INTERVAL = 5  # 远端日志/进程探测间隔（秒）
+    _LOG_TAIL_LINES = 120
+    _HEARTBEAT_SEC = 20
+    _SSH_RETRY_LIMIT = 36  # 5s 间隔约 3 分钟；指数等待时更长
 
     def __init__(self, node_id: str = "autodl-1", node_config: dict[str, Any] | None = None):
         self.node_id = node_id
@@ -111,6 +115,8 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _ssh_base_args(self) -> list[str]:
         args = self._auth_prefix() + [
             "ssh",
+            "-n",
+            "-T",
             "-o", "StrictHostKeyChecking=no",
             "-o", "ConnectTimeout=15",
             "-p", str(self.port),
@@ -125,6 +131,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         proc = await asyncio.create_subprocess_exec(
             *self._ssh_base_args(),
             cmd,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -134,6 +141,102 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             proc.kill()
             raise
         return proc.returncode or 0, stdout.decode(errors="replace"), stderr.decode(errors="replace")
+
+    _SSH_TRANSIENT_MARKERS = (
+        "connection refused",
+        "connection timed out",
+        "connection reset",
+        "no route to host",
+        "broken pipe",
+        "connection closed",
+        "kex_exchange_identification",
+        "banner exchange",
+        "network is unreachable",
+        "temporarily unavailable",
+    )
+
+    def _ssh_probe_failed(self, code: int, out: str, err: str) -> str:
+        """SSH 本身失败时返回原因；探测成功（拿到 ===META===）返回空串。"""
+        blob = f"{out}\n{err}"
+        if "===META===" in blob:
+            return ""
+        low = blob.lower()
+        if any(m in low for m in self._SSH_TRANSIENT_MARKERS) or "ssh:" in low:
+            return (err or out or "ssh failed").strip().splitlines()[-1][:240]
+        if code != 0:
+            return (err or out or f"ssh exit {code}").strip().splitlines()[-1][:240]
+        return "empty probe (no META)"
+
+    async def _ssh_exec_streaming(
+        self,
+        cmd: str,
+        *,
+        timeout: int = 900,
+        on_line: Callable[[str], None] | None = None,
+        heartbeat_sec: float = 20.0,
+        heartbeat_fn: Callable[[int], None] | None = None,
+    ) -> tuple[int, str, str]:
+        """SSH 执行并把 stdout/stderr 逐行回调；静默过久则打心跳。"""
+        proc = await asyncio.create_subprocess_exec(
+            *self._ssh_base_args(),
+            cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        last_out = time.monotonic()
+        started = last_out
+
+        async def _pump(stream: asyncio.StreamReader | None, buf: list[str]) -> None:
+            nonlocal last_out
+            if stream is None:
+                return
+            while True:
+                raw = await stream.readline()
+                if not raw:
+                    break
+                text = raw.decode(errors="replace").rstrip("\r\n")
+                buf.append(text)
+                last_out = time.monotonic()
+                shown = text.strip()
+                if on_line and shown:
+                    on_line(shown[:500])
+
+        async def _heartbeat() -> None:
+            while proc.returncode is None:
+                await asyncio.sleep(max(5.0, heartbeat_sec))
+                if proc.returncode is not None:
+                    return
+                if heartbeat_fn and (time.monotonic() - last_out) >= heartbeat_sec:
+                    heartbeat_fn(int(time.monotonic() - started))
+
+        hb_task = asyncio.create_task(_heartbeat())
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    _pump(proc.stdout, stdout_parts),
+                    _pump(proc.stderr, stderr_parts),
+                    proc.wait(),
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+        finally:
+            hb_task.cancel()
+            try:
+                await hb_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        return (
+            proc.returncode or 0,
+            "\n".join(stdout_parts),
+            "\n".join(stderr_parts),
+        )
 
     async def _rsync_push(self, local_path: str, remote_dir: str, *, is_dir: bool = False) -> None:
         """rsync 推送本地文件/目录到远端目录。"""
@@ -292,7 +395,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                     qdb_key_env = f"QUANTDB_API_KEY={shlex.quote(qdb_key)} " if qdb_key else ""
                     sync_cmd = (
                         f"PYTHONPATH={self.work_dir}:{self.work_dir}/backend_min "
-                        f"{qdb_key_env}{sync_python} {sync_script}"
+                        f"PYTHONUNBUFFERED=1 {qdb_key_env}{sync_python} -u {sync_script}"
                     )
                     # native 直读裁剪到近 3 年（避免每次全量下载 2016 至今的历史分区）。
                     # 默认近 3 年；TRAINING_AUTODL_QUANTDB_SINCE 可给 "YYYY-MM-DD" 或 "N-year"，
@@ -323,10 +426,30 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 # 只同步训练实际请求的因子源（factor_source），避免每次把 l2/l1_l2 等
                 # 无关数据集全量拉取（几 GB、拖慢冒烟/训练启动）。
                 sync_datasets = direct_source or "l1_factors"
-                code, out, err = await self._ssh_exec(
+                since_note = f"，since={sync_since}" if "sync_since" in locals() and sync_since else ""
+                self._log(
+                    run_id,
+                    f"[SYNC] 开始增量同步 QuantDB {sync_datasets}{since_note}（过程日志会持续刷新）...",
+                    progress=8,
+                )
+
+                def _on_sync_line(text: str) -> None:
+                    self._log(run_id, f"[SYNC] {text}", progress=10)
+
+                def _on_sync_heartbeat(elapsed: int) -> None:
+                    self._log(
+                        run_id,
+                        f"[SYNC] QuantDB {sync_datasets} 仍在同步{since_note}… 已等待 {elapsed}s",
+                        progress=10,
+                    )
+
+                code, out, err = await self._ssh_exec_streaming(
                     f"mkdir -p {quoted_dir} && QM_QUANTDB_DATA_DIR={quoted_dir} "
                     f"{sync_cmd} --parquet-only --datasets {sync_datasets}",
                     timeout=1800,
+                    on_line=_on_sync_line,
+                    heartbeat_sec=self._HEARTBEAT_SEC,
+                    heartbeat_fn=_on_sync_heartbeat,
                 )
                 if code != 0:
                     raise RuntimeError(f"AutoDL QuantDB sync failed: {err or out}")
@@ -402,7 +525,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             if self.exec_mode == "native_python":
                 self._log(run_id, "[SYSTEM] 在 AutoDL 启动原生训练进程（免 Docker）...", progress=20)
                 run_key, log_path = await self._launch_native_train(run_id, config)
-                self._log(run_id, f"[SYSTEM] 训练进程已启动 (pid={run_key}, log={log_path})", progress=22)
+                self._log(
+                    run_id,
+                    f"[SYSTEM] 训练进程已启动 (pid={run_key}, log={log_path})",
+                    status="running",
+                    progress=22,
+                )
             else:
                 self._log(run_id, "[SYSTEM] 在 AutoDL 启动训练容器...", progress=20)
                 container_name = f"qm-train-{run_id}"
@@ -420,7 +548,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("[%s] 远程训练编排失败: %s", run_id, exc, exc_info=True)
-            self._log(run_id, f"[ERROR] 远程训练编排失败: {exc}", status="failed", progress=0)
+            self._log(
+                run_id,
+                f"[ERROR] 远程训练编排失败: {str(exc).strip() or type(exc).__name__}",
+                status="failed",
+                progress=0,
+            )
 
     async def _ensure_native_sync_files(self) -> None:
         """保证免 docker 直读同步脚本就位（quantdb_daily_sync.py + quantdb-sdk）。
@@ -474,8 +607,6 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         # native 直读需要 loading.py 的 backend...quantdb_factor_reader 可 import
         await self._deploy_native_backend(run_id)
 
-        # 定位本地 train.py（docker 流程已 rsync 到 work_dir/train.py）
-        result_path = str(config.get("output", {}).get("result_path") or f"{self.work_dir}/result.json")
         # PYTHONPATH 需同时在 work_dir（训练包）与 backend_min（backend.* 子树）上
         py_path = f"{self.work_dir}:{self.work_dir}/backend_min"
         python = self.native_python or "/root/miniconda3/bin/python"
@@ -486,18 +617,31 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         gpu_env = ""
         if self.gpus and self.gpus not in ("all", "0", ""):
             gpu_env = f"CUDA_VISIBLE_DEVICES={self.gpus} "
-        cmd = (
-            f"cd {self.work_dir} && rm -f {exit_mark} && "
-            f"{gpu_env}nohup bash -c "
-            f"'PYTHONPATH={py_path} {python} {self.work_dir}/train.py "
-            f"--config {self.work_dir}/config.yaml > {log_path} 2>&1; "
-            f"echo $? > {exit_mark}' >/dev/null 2>&1 & "
-            f"echo $! > {pid_file}; echo $!; cat {pid_file}"
+        inner = (
+            f"PYTHONUNBUFFERED=1 QM_TRAIN_WORKSPACE={shlex.quote(self.work_dir)} "
+            f"PYTHONPATH={py_path} {python} -u "
+            f"{shlex.quote(self.work_dir)}/train.py "
+            f"--config {shlex.quote(self.work_dir)}/config.yaml "
+            f">{shlex.quote(log_path)} 2>&1; "
+            f"echo $? > {shlex.quote(exit_mark)}"
         )
-        code, out, err = await self._ssh_exec(cmd, timeout=60)
+        cmd = (
+            f"cd {shlex.quote(self.work_dir)} && rm -f {shlex.quote(exit_mark)} && "
+            f"{gpu_env}setsid bash -c {shlex.quote(inner)} </dev/null >/dev/null 2>&1 & "
+            f"echo $! | tee {shlex.quote(pid_file)}"
+        )
+        try:
+            code, out, err = await self._ssh_exec(cmd, timeout=30)
+        except asyncio.TimeoutError:
+            # 进程可能已 nohup 起来，SSH 会话却没立刻退出；改读 pid 文件。
+            code, out, err = await self._ssh_exec(
+                f"cat {shlex.quote(pid_file)} 2>/dev/null || true", timeout=15
+            )
         if code != 0:
             raise RuntimeError(f"远端原生训练启动失败: {err or out}")
-        pid = (out or "").splitlines()[0].strip() if (out or "").strip() else ""
+        pid = next((ln.strip() for ln in (out or "").splitlines() if ln.strip().isdigit()), "")
+        if not pid:
+            raise RuntimeError(f"远端原生训练未返回 pid: {err or out}")
         return pid, log_path
 
     async def _deploy_native_backend(self, run_id: str) -> None:
@@ -578,7 +722,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                         continue
                     seen_lines.add(line)
                     progress = max(progress, LocalDockerProgress.infer(line, progress))
-                    self._log(run_id, line, progress=progress)
+                    self._log(run_id, line, status="running", progress=progress)
 
                 # 检查容器状态
                 code2, status_out, _ = await self._ssh_exec(
@@ -604,50 +748,106 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             self._log(run_id, f"[ERROR] 远程轮询异常: {exc}", status="failed", progress=progress)
 
     async def _poll_native_process(self, run_id: str) -> None:
-        """轮询免 docker 直跑的原生训练进程（tail 日志 + 进程存活/退出码）。"""
+        """轮询免 docker 直跑的原生训练进程（一次 SSH 取日志+存活，静默时心跳）。"""
         log_path = f"{self.work_dir}/train_{run_id}.log"
         pid_file = f"{self.work_dir}/train_{run_id}.pid"
+        exit_mark = f"{self.work_dir}/train_{run_id}.exit"
         seen_lines: set[str] = set()
         progress = 22
+        silent_rounds = 0
+        last_n = 0
+        ssh_fails = 0
+        missing_pid_rounds = 0
+        last_pid = ""
         try:
             while True:
-                # 读日志尾部（与 docker logs 对齐，同样喂进度解析器）
-                code, out, err = await self._ssh_exec(
-                    f"tail -n {self._LOG_TAIL_LINES} {log_path} 2>&1",
-                    timeout=120,
+                start = last_n + 1
+                probe = (
+                    f"n=$(wc -l < {shlex.quote(log_path)} 2>/dev/null || echo 0); "
+                    f"echo '===LOG==='; "
+                    f"if [ \"$n\" -ge {start} ]; then sed -n '{start},$p' {shlex.quote(log_path)}; fi; "
+                    f"echo '===META==='; "
+                    f"echo COUNT:$n; "
+                    f"pid=$(cat {shlex.quote(pid_file)} 2>/dev/null || true); echo PID:$pid; "
+                    f"if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then echo ALIVE:1; else echo ALIVE:0; fi; "
+                    f"echo EXIT:$(cat {shlex.quote(exit_mark)} 2>/dev/null || true)"
                 )
-                for line in (out + err).splitlines():
+                code, out, err = await self._ssh_exec(probe, timeout=120)
+                ssh_err = self._ssh_probe_failed(code, out, err)
+                if ssh_err:
+                    ssh_fails += 1
+                    wait = min(60, self._POLL_INTERVAL * min(ssh_fails, 8))
+                    self._log(
+                        run_id,
+                        f"[SYSTEM] AutoDL SSH 暂时不可达，{wait}s 后重试（{ssh_fails}/{self._SSH_RETRY_LIMIT}）：{ssh_err}",
+                        status="running",
+                        progress=progress,
+                    )
+                    if ssh_fails >= self._SSH_RETRY_LIMIT:
+                        self._log(
+                            run_id,
+                            f"[ERROR] AutoDL SSH 连续失败 {ssh_fails} 次，停止轮询（训练进程可能仍在节点上）",
+                            status="failed",
+                            progress=progress,
+                        )
+                        return
+                    await asyncio.sleep(wait)
+                    continue
+                ssh_fails = 0
+
+                blob = out + err
+                log_blob, _, meta_blob = blob.partition("===META===")
+                log_blob = log_blob.replace("===LOG===", "")
+                got_new = False
+                for line in log_blob.splitlines():
                     line = line.strip()
                     if not line or line in seen_lines:
                         continue
+                    if line.lower().startswith("ssh:"):
+                        continue
                     seen_lines.add(line)
+                    got_new = True
                     progress = max(progress, LocalDockerProgress.infer(line, progress))
-                    self._log(run_id, line, progress=progress)
+                    self._log(run_id, line, status="running", progress=progress)
 
-                # 进程存活探测：取 pid 文件，kill -0 判存活；异常退出会残留 exit 码
-                code2, pid_out, _ = await self._ssh_exec(
-                    f"cat {pid_file} 2>/dev/null || echo ''", timeout=30,
-                )
-                pid = (pid_out or "").strip()
+                meta = {}
+                for line in meta_blob.splitlines():
+                    if ":" in line:
+                        key, val = line.split(":", 1)
+                        meta[key.strip()] = val.strip()
+                try:
+                    last_n = max(last_n, int(meta.get("COUNT") or last_n))
+                except ValueError:
+                    pass
+                pid = (meta.get("PID") or last_pid or "").strip()
+                alive = meta.get("ALIVE") == "1"
                 if pid:
-                    code3, alive_out, _ = await self._ssh_exec(
-                        f"kill -0 {pid} 2>/dev/null && echo alive || echo dead", timeout=30,
-                    )
-                    alive = "alive" in (alive_out or "")
-                    if not alive:
-                        await asyncio.sleep(1)
-                        _, mark_out, _ = await self._ssh_exec(
-                            f"cat {self.work_dir}/train_{run_id}.exit 2>/dev/null || echo ''",
-                            timeout=30,
-                        )
-                        mark = (mark_out or "").strip()
-                        exit_code = mark if mark != "" else "1"
-                        await self._handle_container_end(run_id, f"native-{run_id}", exit_code)
-                        return
-                else:
-                    # pid 文件缺失：可能启动失败，直接判失败
-                    await self._handle_container_end(run_id, f"native-{run_id}", "1")
+                    last_pid = pid
+                if pid and not alive:
+                    await asyncio.sleep(1)
+                    exit_code = meta.get("EXIT") or "1"
+                    await self._handle_container_end(run_id, f"native-{run_id}", exit_code)
                     return
+                if not pid:
+                    missing_pid_rounds += 1
+                    if missing_pid_rounds >= 6:
+                        await self._handle_container_end(run_id, f"native-{run_id}", "1")
+                        return
+                    await asyncio.sleep(self._POLL_INTERVAL)
+                    continue
+                missing_pid_rounds = 0
+
+                if got_new:
+                    silent_rounds = 0
+                else:
+                    silent_rounds += 1
+                    if silent_rounds % max(1, int(self._HEARTBEAT_SEC / self._POLL_INTERVAL)) == 0:
+                        self._log(
+                            run_id,
+                            f"[SYSTEM] AutoDL 训练进程运行中（pid={pid}，暂无新日志，可能在读因子或拟合）",
+                            status="running",
+                            progress=progress,
+                        )
 
                 await asyncio.sleep(self._POLL_INTERVAL)
         except asyncio.CancelledError:
@@ -797,6 +997,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             "output": {
                 # native（免 docker）模式下产物写 work_dir 才能被 _pull_artifacts 拉回；
                 # docker 模式容器内 /workspace 即挂在 work_dir，等价。
+                "workspace": self.work_dir,
                 "result_path": f"{self.work_dir}/result.json",
                 "required_artifacts": payload.get(
                     "required_artifacts",
@@ -804,7 +1005,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 ),
             },
             "callback": {
-                "url": f"{self.api_base}/api/v1/models/training-runs/{run_id}/complete",
+                "url": self._callback_url(run_id),
                 "secret": self.internal_secret,
             },
             "cache": {"dir": "/tmp"},
@@ -1045,6 +1246,41 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 return p
         return None
 
+    async def _persist_status(
+        self,
+        run_id: str,
+        status: str,
+        progress: int | None = None,
+        error_line: str = "",
+    ) -> None:
+        """把 Redis 实时状态同步到 DB，避免切页恢复时永远停在 pending。"""
+        from backend.services.api.routers.admin.db import TrainingJobRecord
+        from backend.shared.database_manager_v2 import get_session
+
+        try:
+            async with get_session() as db:
+                record = await db.get(TrainingJobRecord, run_id)
+                if not record:
+                    return
+                if record.status in {"completed", "failed"} and status not in {
+                    "completed",
+                    "failed",
+                }:
+                    return
+                record.status = status
+                if progress is not None:
+                    record.progress = max(int(record.progress or 0), int(progress))
+                if status == "failed":
+                    prev = record.result if isinstance(record.result, dict) else {}
+                    record.result = {
+                        **prev,
+                        "status": "failed",
+                        "error": error_line or prev.get("error") or "远程训练失败",
+                    }
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[%s] persist training status failed: %s", run_id, exc)
+
     def _log(self, run_id: str, line: str, *, status: str | None = None, progress: int | None = None) -> None:
         try:
             self.log_stream.append_log(
@@ -1057,6 +1293,20 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             )
         except Exception:  # noqa: BLE001
             logger.warning("append_log failed for %s: %s", run_id, line)
+        if not status:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                self._persist_status(
+                    run_id,
+                    status,
+                    progress,
+                    error_line=line if status == "failed" else "",
+                )
+            )
+        except RuntimeError:
+            logger.warning("[%s] no event loop to persist status=%s", run_id, status)
 
 
 class LocalDockerProgress:

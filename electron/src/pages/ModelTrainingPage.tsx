@@ -27,6 +27,8 @@ import { TrainingConsole } from './training/TrainingConsole';
 import { TrainingResultView } from './training/TrainingResultView';
 
 const { Title } = Typography;
+const NODE_STORAGE_KEY = 'qm.training.selectedNode';
+const NODE_READY = new Set(['ready', 'busy']);
 
 const TRAINING_MODULES = [
   { title: '特征选择', description: '筛选输入因子', icon: Database, hint: '第一步' },
@@ -207,7 +209,9 @@ export const ModelTrainingPage: React.FC = () => {
   const [settingDefaultModel, setSettingDefaultModel] = useState(false);
   const [draftSavedAt, setDraftSavedAt] = useState<string>('');
   const [trainingNodes, setTrainingNodes] = useState<any[]>([]);
-  const [selectedNode, setSelectedNode] = useState<string>('local');
+  const [selectedNode, setSelectedNode] = useState<string>(
+    () => localStorage.getItem(NODE_STORAGE_KEY) || 'local'
+  );
   const [nodesLoading, setNodesLoading] = useState(false);
   // 训练时长预算（分钟）。前端已移除配置入口，固定透传 720（宽于编排器默认 120，
   // 为 GRU/LSTM 等 DL 模型在 CPU 上的长训练留出余量），如需调整改这里。
@@ -221,6 +225,7 @@ export const ModelTrainingPage: React.FC = () => {
   const pollTimerRef = useRef<number | null>(null);
   const pollFailuresRef = useRef(0);
   const logsRef = useRef<string[]>([]);
+  const serverLogSeenRef = useRef<Set<string>>(new Set());
   const catalogSuggestionAppliedRef = useRef(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const importedFeaturesRef = useRef<string[] | null>(null);
@@ -272,12 +277,18 @@ export const ModelTrainingPage: React.FC = () => {
   const isDirectCatalogReady = !isQuantDBMarket(currentMarket) || (
     !!factorCatalogVersion && dataCoverage?.ready === true
   );
-  const isSelectedNodeReady = selectedNodeObj ? selectedNodeObj.readiness === 'ready' : true;
+  const isSelectedNodeReady = selectedNodeObj
+    ? NODE_READY.has(String(selectedNodeObj.readiness || ''))
+    : trainingNodes.length === 0;
   const isReadyToTrain = selectedFeatures.length > 0 && target.horizonDays >= 1 && totalDays > 0 && isDirectCatalogReady && isSelectedNodeReady;
-  const isTrainingInProgress =
-    trainingStatus === 'running' ||
-    ['pending', 'provisioning', 'running', 'waiting_callback'].includes((backendRunStatus || '').toLowerCase());
+  // 只看本页训练态，不用后端残留的 pending 把「开始训练」锁死
+  const isTrainingInProgress = trainingStatus === 'running';
   const disableStartTraining = (isTrainingInProgress || !isSelectedNodeReady) && currentStep === 3;
+  const startDisabledReason = isTrainingInProgress
+    ? '训练任务进行中'
+    : !isSelectedNodeReady
+      ? `当前节点未就绪（${selectedNodeObj?.readiness_label || '检测中'}）。请在左侧选择已就绪的 AutoDL 节点，或点刷新。`
+      : '';
 
   // 自动 displayName
   useEffect(() => {
@@ -302,6 +313,22 @@ export const ModelTrainingPage: React.FC = () => {
   useEffect(() => {
     loadNodes();
   }, []);
+
+  useEffect(() => {
+    if (selectedNode) localStorage.setItem(NODE_STORAGE_KEY, selectedNode);
+  }, [selectedNode]);
+
+  useEffect(() => {
+    if (trainingNodes.length === 0) return;
+    const current = trainingNodes.find((n) => n.id === selectedNode);
+    if (current && NODE_READY.has(String(current.readiness || ''))) return;
+    const preferred = trainingNodes.find((n) => n.type === 'remote' && n.readiness === 'ready')
+      || trainingNodes.find((n) => n.readiness === 'ready')
+      || trainingNodes.find((n) => n.type === 'remote' && NODE_READY.has(String(n.readiness || '')));
+    if (preferred && preferred.id !== selectedNode) {
+      setSelectedNode(preferred.id);
+    }
+  }, [trainingNodes, selectedNode]);
 
   // 直读市场（CN/HK）训练目录完全由后端发布版本驱动；不回退到任何内置字段。
   useEffect(() => {
@@ -445,6 +472,15 @@ export const ModelTrainingPage: React.FC = () => {
     setLogs(next);
   };
 
+  const ingestServerLogs = (text?: string) => {
+    if (!text) return;
+    text.split('\n').filter(Boolean).forEach((line) => {
+      if (serverLogSeenRef.current.has(line)) return;
+      serverLogSeenRef.current.add(line);
+      pushLog(line);
+    });
+  };
+
   const startTraining = async () => {
     if (isTrainingInProgress) {
       message.warning('训练任务进行中，请稍候');
@@ -460,6 +496,9 @@ export const ModelTrainingPage: React.FC = () => {
     setTrainingStatus('running');
     setExecutionStage('准备训练请求');
     setProgress(5);
+    logsRef.current = [];
+    serverLogSeenRef.current = new Set();
+    setLogs([]);
     pushLog(`正在提交训练请求：${displayName}`);
 
     try {
@@ -482,7 +521,7 @@ export const ModelTrainingPage: React.FC = () => {
   const startPolling = async (runId: string) => {
     clearTimers();
     pollFailuresRef.current = 0;
-    pollTimerRef.current = window.setInterval(async () => {
+    const tick = async () => {
       let run;
       try {
         run = await modelTrainingService.getTrainingRun(runId);
@@ -499,19 +538,21 @@ export const ModelTrainingPage: React.FC = () => {
         return;
       }
       setBackendRunStatus(run.status || '');
-      if (run.logs) {
-         run.logs.split('\n').filter(Boolean).forEach(line => {
-           if (!logsRef.current.some(l => l.includes(line))) pushLog(line);
-         });
+      ingestServerLogs(run.logs);
+      const liveStatuses = ['running', 'provisioning', 'waiting_callback', 'pending'];
+      const failedByLog = /\[ERROR\].*(编排失败|训练异常退出|原生进程轮询异常)/.test(run.logs || '');
+      if (liveStatuses.includes(run.status || '') && !failedByLog) {
+        setProgress(Math.max(run.progress || 5, 5));
       }
-      if (run.status === 'running') setProgress(Math.max(run.progress || 20, 20));
 
-      if (run.isCompleted) {
+      if (run.isCompleted || failedByLog || run.status === 'failed') {
         clearTimers();
-        if (run.status === 'failed') {
+        if (run.status === 'failed' || failedByLog) {
           const errorMsg = (run.result as any)?.error || '训练失败';
           setResultError(errorMsg);
           setTrainingStatus('draft');
+          setExecutionStage('待配置');
+          setBackendRunStatus('');
         } else {
           const parsed = parseTrainingResult(requestPreview, runId, run.result);
           if (parsed) {
@@ -527,7 +568,9 @@ export const ModelTrainingPage: React.FC = () => {
           }
         }
       }
-    }, 3000);
+    };
+    void tick();
+    pollTimerRef.current = window.setInterval(tick, 3000);
   };
 
   // 页面挂载时恢复「切页前的活跃训练」：有进行中/最近任务则继续轮询，进度不丢
@@ -536,15 +579,23 @@ export const ModelTrainingPage: React.FC = () => {
     (async () => {
       const run = await modelTrainingService.getActiveTrainingRun();
       if (!active || !run) return;
-      // 仅恢复尚未完成的任务；已完成/失败的任务保留默认数据卡片
-      if (run.isCompleted) return;
-      setBackendRunStatus(run.status || '');
-      if (run.logs) {
-        run.logs.split('\n').filter(Boolean).forEach(line => {
-          if (!logsRef.current.some(l => l.includes(line))) pushLog(line);
-        });
+      ingestServerLogs(run.logs);
+      const failedByLog = /\[ERROR\].*(编排失败|训练异常退出|原生进程轮询异常)/.test(run.logs || '');
+      // 仅恢复尚未完成的任务；已完成/失败（含 Redis 终态、日志已报错）不再伪装成训练中
+      if (run.isCompleted || run.status === 'failed' || failedByLog) {
+        setBackendRunStatus(run.status || (failedByLog ? 'failed' : ''));
+        if (run.status === 'failed' || failedByLog) {
+          setResultError((run.result as any)?.error || '训练失败');
+          setTrainingStatus('draft');
+          setExecutionStage('待配置');
+          setBackendRunStatus('');
+        }
+        return;
       }
-      if (run.status === 'running') setProgress(Math.max(run.progress || 20, 20));
+      setBackendRunStatus(run.status || '');
+      if (run.status === 'running' || run.status === 'provisioning' || run.status === 'waiting_callback' || run.status === 'pending') {
+        setProgress(Math.max(run.progress || 5, 5));
+      }
       setTrainingStatus('running');
       setExecutionStage('训练进行中（已从上次会话恢复）');
       startPolling(run.runId);
@@ -862,9 +913,13 @@ export const ModelTrainingPage: React.FC = () => {
                         </>
                       )}
                       <Button size="small" icon={<RefreshCcw size={14}/>} className="rounded-xl h-8 font-bold px-3" onClick={handleResetAll} disabled={isTrainingInProgress}>清空</Button>
-                      <Button size="small" type="primary" icon={<ChevronRight size={14}/>} className="rounded-xl h-8 bg-blue-600 font-bold px-4 shadow-sm" onClick={stepAction} disabled={disableStartTraining}>
-                        {stepActionLabel}
-                      </Button>
+                      <Tooltip title={disableStartTraining ? startDisabledReason : undefined}>
+                        <span className={disableStartTraining ? 'inline-block' : undefined}>
+                          <Button size="small" type="primary" icon={<ChevronRight size={14}/>} className="rounded-xl h-8 bg-blue-600 font-bold px-4 shadow-sm" onClick={stepAction} disabled={disableStartTraining}>
+                            {stepActionLabel}
+                          </Button>
+                        </span>
+                      </Tooltip>
                     </Space>
                   </div>
                 </Card>

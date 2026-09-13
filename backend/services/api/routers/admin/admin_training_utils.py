@@ -837,13 +837,22 @@ async def get_training_run_for_owner(run_id: str, current_user: dict[str, Any]) 
         except Exception:
             pass
 
-    if effective_status not in {"completed", "failed"} and live_status in {
+    # 远端编排（AutoDL）常只把终态写进 Redis，DB 会一直停在 pending。
+    # 若仍以 DB 为准，前端会把已失败任务显示成「训练中」。
+    if live_status in {"completed", "failed"}:
+        effective_status = live_status
+    elif effective_status not in {"completed", "failed"} and live_status in {
         "pending",
         "provisioning",
         "running",
         "waiting_callback",
     }:
         effective_status = live_status
+
+    if effective_status == "failed" and not normalized_result.get("error"):
+        last_line = str(live_snapshot.get("last_line") or "").strip()
+        if last_line:
+            normalized_result["error"] = last_line
 
     merged_logs = _merge_log_text(record.logs or "", live_logs)
 
