@@ -589,6 +589,16 @@ export const ModelTrainingPage: React.FC = () => {
           setTrainingStatus('draft');
           setExecutionStage('待配置');
           setBackendRunStatus('');
+        } else {
+          const parsed = parseTrainingResult(requestPreview, run.runId, run.result);
+          if (parsed) {
+            setResult(parsed);
+            setResultError('');
+            setTrainingStatus('completed');
+            setProgress(100);
+            setCurrentStep(4);
+            setExecutionStage('训练完成');
+          }
         }
         return;
       }

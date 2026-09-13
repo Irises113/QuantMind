@@ -67,6 +67,21 @@ def _workspace_from_cfg(cfg: dict | None = None, result_path: Path | None = None
     return path
 
 
+def _resolve_inference_template(workspace: Path) -> Path | None:
+    """Docker 镜像路径优先；native AutoDL 用编排器推到 workspace/templates 的副本。"""
+    candidates = [
+        Path("/app/backend/services/engine/inference/templates/inference_parquet.py"),
+        workspace / "templates" / "inference_parquet.py",
+        Path(str(os.getenv("QM_TRAIN_WORKSPACE") or "").strip()) / "templates" / "inference_parquet.py",
+    ]
+    for path in candidates:
+        if str(path).strip() in {"", "templates/inference_parquet.py"}:
+            continue
+        if path.is_file():
+            return path
+    return None
+
+
 # ── B4 拆包：类型集合/注册表/分派与训练器实现见 docker/training/model_trainers/ ──
 # （训练容器经挂载与镜像 COPY 双通道同步；本地见编排器 volumes，远端见 rsync。）
 from model_trainers.metrics import _compute_metrics
@@ -1303,9 +1318,9 @@ def main() -> int:
             logger.info("metadata.json saved locally")
 
             # 复制推理脚本模板
-            template_path = Path("/app/backend/services/engine/inference/templates/inference_parquet.py")
+            template_path = _resolve_inference_template(workspace)
             inference_dest = workspace / "inference.py"
-            if template_path.is_file():
+            if template_path is not None:
                 inference_dest.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
                 logger.info("inference.py copied from unified template: %s", template_path)
 
@@ -1522,14 +1537,17 @@ def main() -> int:
             logger.info("metadata.json saved locally")
 
             # 复制统一推理脚本模板（而非内联生成旧版脚本）
-            template_path = Path("/app/backend/services/engine/inference/templates/inference_parquet.py")
+            template_path = _resolve_inference_template(workspace)
             inference_dest = workspace / "inference.py"
-            if template_path.is_file():
+            if template_path is not None:
                 inference_dest.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
                 logger.info("inference.py copied from unified template: %s", template_path)
             else:
                 # 兜底：模板不存在时写入简化版（仅记录警告）
-                logger.warning("统一推理模板不存在: %s，使用简化版", template_path)
+                logger.warning(
+                    "统一推理模板不存在（已查 /app/... 与 %s/templates），使用简化版",
+                    workspace,
+                )
                 _INFERENCE_SCRIPT_FALLBACK = '''#!/usr/bin/env python3
 """
 QuantMind Parquet 数据源推理脚本 (inference.py 模板)

@@ -1550,13 +1550,16 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
             return "US"
         if "BTC" in benchmark or "ETH" in benchmark:
             return "CRYPTO"
-        # 3. 从 universe 路径推断
+        # 3. 从 universe 路径推断（禁止对 "us"/"hk" 做子串匹配：
+        # custom / quantcustom / __custom__ 都含 "us"，会误判为美股）
         universe = str(getattr(request, "universe", "") or "").lower()
-        if "hk" in universe:
+        universe_tokens = {p for p in universe.replace("\\", "/").replace("-", "_").split("/") if p}
+        universe_tokens |= {p for p in universe.replace("\\", "/").replace("/", "_").split("_") if p}
+        if "hk_data" in universe or universe in {"hk", "hong_kong"} or "hk" in universe_tokens:
             return "HK"
-        if "us" in universe:
+        if "us_data" in universe or universe in {"us", "us_stock"} or universe_tokens & {"us", "us_stock"}:
             return "US"
-        if "crypto" in universe:
+        if "crypto_data" in universe or universe in {"crypto"} or "crypto" in universe_tokens:
             return "CRYPTO"
         # 默认 A 股
         return "CN"
@@ -1575,9 +1578,11 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
         context = meta.get("context") or {}
         if isinstance(context, dict):
             market = str(context.get("market") or "").upper().strip()
+            if market in ("CUSTOM", "自定义"):
+                return "CN"
             if market in ("HK", "HONG_KONG", "港股"):
                 return "HK"
-            if market in ("US", "美股"):
+            if market in ("US", "US_STOCK", "美股"):
                 return "US"
             if market in ("CRYPTO", "加密"):
                 return "CRYPTO"

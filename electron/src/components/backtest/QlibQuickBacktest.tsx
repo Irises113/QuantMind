@@ -34,6 +34,30 @@ import { selectCurrentMarket } from '../../store/slices/uiSlice';
 import { getMarketConfig } from '../../config/marketConfig';
 import dayjs from 'dayjs';
 
+/** 模型 metadata.market 与当前页签对齐。禁止 includes('US')：CUSTOM 会误判为美股。 */
+function modelMatchesMarket(rawMarket: string, currentMarket: string): boolean {
+  const mkt = rawMarket.toUpperCase().trim();
+  if (!mkt) return true;
+  const cur = currentMarket.toUpperCase();
+  if (mkt === 'CUSTOM' || mkt.endsWith('_CUSTOM')) return cur === 'CN';
+  if (cur === 'CN') return mkt === 'CN' || mkt === 'A_SHARE' || mkt === 'A股' || mkt === 'CHINA';
+  if (cur === 'HK') return mkt === 'HK' || mkt === 'HONG_KONG' || mkt === '港股';
+  if (cur === 'US') return mkt === 'US' || mkt === 'US_STOCK' || mkt === '美股';
+  if (cur === 'CRYPTO') return mkt === 'CRYPTO' || mkt === '加密';
+  if (cur === 'FUTURES') return mkt === 'FUTURES' || mkt === '期货';
+  return true;
+}
+
+function modelMarketLabel(rawMarket: string): string {
+  const mkt = rawMarket.toUpperCase().trim();
+  if (mkt === 'CUSTOM' || mkt.endsWith('_CUSTOM')) return '自定义';
+  if (mkt === 'HK' || mkt === 'HONG_KONG') return '港股';
+  if (mkt === 'US' || mkt === 'US_STOCK') return '美股';
+  if (mkt === 'CRYPTO') return '加密';
+  if (mkt === 'FUTURES') return '期货';
+  return 'A股';
+}
+
 const MARKET_UNIVERSE_PRESETS: Record<string, { label: string; value: string; custom?: boolean }[]> = {
   CN: [
     { label: '全部', value: 'all' },
@@ -237,13 +261,7 @@ export const QlibQuickBacktest: React.FC = () => {
       const ctxMarket = String((ctx && typeof ctx === 'object' ? ctx.market : '') || '').toUpperCase();
       const mkt = raw || ctxMarket;
       if (!mkt) return true; // 无市场标记的模型始终显示
-      // 当前市场映射
-      const cur = currentMarket.toUpperCase();
-      if (cur === 'CN') return mkt.includes('CN') || mkt.includes('A_SHARE') || mkt.includes('A股');
-      if (cur === 'HK') return mkt.includes('HK') || mkt.includes('HONG_KONG') || mkt.includes('港股');
-      if (cur === 'US') return mkt.includes('US') || mkt.includes('美股');
-      if (cur === 'CRYPTO') return mkt.includes('CRYPTO') || mkt.includes('加密');
-      return true;
+      return modelMatchesMarket(mkt, currentMarket);
     });
   }, [models, currentMarket]);
 
@@ -579,8 +597,7 @@ export const QlibQuickBacktest: React.FC = () => {
               const fw = String(meta.framework || '-');
               const fc = meta.feature_count ?? '-';
               const mkt = String(meta.market || '');
-              const mktUpper = mkt.toUpperCase();
-              const mktLabel = mktUpper.includes('HK') ? '港股' : mktUpper.includes('US') ? '美股' : mktUpper.includes('CRYPTO') ? '加密' : 'A股';
+              const mktLabel = modelMarketLabel(mkt);
               const horizon = meta.target_horizon_days ?? meta.horizon_days ?? '-';
               const trainStart = meta.train_start || meta.training_window?.split?.(' to ')?.[0] || '';
               const trainEnd = meta.train_end || meta.training_window?.split?.(' to ')?.[1] || '';

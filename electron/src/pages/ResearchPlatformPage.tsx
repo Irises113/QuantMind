@@ -735,6 +735,9 @@ export const ResearchPlatformPage: React.FC = () => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   });
+  // 用户点选过的推理日：换模型时尽量沿用，便于同一天对比不同模型；
+  // 新模型没有该日才回退到该模型最新批次，但不覆盖用户意向日期。
+  const preferredInferenceDateRef = React.useRef<string>('');
 
   // ---- QuantDB 因子缓存 ----
   // 全池投影因子：筛选与排序在分页之前执行，必须覆盖整个候选池而非当前页
@@ -929,11 +932,19 @@ export const ResearchPlatformPage: React.FC = () => {
         const runs = await researchService.getInferenceRuns(selectedModelId);
         if (cancelled) return;
         setAvailableRuns(runs);
-        // 列表按日期倒序；默认选中最新日期。个股列表按日期直读
-        // pred.parquet（B 套），训练测试集日期同样可查看全市场分数
+        // 列表按日期倒序。首次进入默认最新日；用户已选过历史日后换模型
+        // 优先对齐同一交易日，方便跨模型对比，缺该日才回退最新批次。
         const first = runs[0];
-        setSelectedDate(first?.inferenceDate || '');
-        setSelectedRunId(first ? first.runId || `pred_${(first.inferenceDate || '').replaceAll('-', '')}` : '');
+        const preferred = preferredInferenceDateRef.current;
+        const matched = preferred
+          ? runs.find((item) => item.inferenceDate === preferred)
+          : undefined;
+        const pick = matched || first;
+        setSelectedDate(pick?.inferenceDate || '');
+        setSelectedRunId(pick ? pick.runId || `pred_${(pick.inferenceDate || '').replaceAll('-', '')}` : '');
+        if (preferred && !matched && pick?.inferenceDate) {
+          message.warning(`该模型没有 ${preferred} 的推理截面，已切到 ${pick.inferenceDate}`);
+        }
       } catch (error) {
         console.error('[ResearchPlatformPage] load runs failed:', error);
         if (!cancelled) setRunsError('加载推理批次失败');
@@ -2185,6 +2196,7 @@ export const ResearchPlatformPage: React.FC = () => {
                                     disabled={!hasData}
                                     onClick={() => {
                                       if (!run) return;
+                                      preferredInferenceDateRef.current = d;
                                       setSelectedDate(d);
                                       setSelectedRunId(run.runId || `pred_${d.replaceAll('-', '')}`);
                                       setCalendarOpen(false);
