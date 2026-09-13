@@ -21,6 +21,10 @@ export interface LiveTradeConfig {
   order_type: LiveOrderType;
   max_price_deviation?: number;
   max_orders_per_cycle: number;
+  /** 全局股票池 ref（如 pool:csi1000），实盘信号裁剪用 */
+  pool_id?: string | null;
+  /** 仅前端展示用，后端忽略 */
+  pool_name?: string | null;
 }
 
 export interface StrategyLiveDefaults {

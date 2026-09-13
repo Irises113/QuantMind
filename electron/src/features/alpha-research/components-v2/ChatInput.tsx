@@ -132,7 +132,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   {universes.length > 0
                     ? universes.map((u) => (
                         <option key={u.id} value={u.id}>
-                          {u.name}{u.stockCount > 0 ? ` (${u.stockCount})` : ''}
+                          {u.isSystem === false ? '★ ' : ''}{u.name}{u.stockCount > 0 ? ` (${u.stockCount})` : ''}
                         </option>
                       ))
                     : (

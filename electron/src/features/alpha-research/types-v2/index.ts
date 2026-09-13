@@ -13,8 +13,8 @@ export type ExecutionPhase =
 // Factor quality level
 export type FactorQuality = 'high' | 'medium' | 'low';
 
-// Stock universe identifier (QuantDB index constituents)
-export type UniverseId =
+// 内置指数池 + 全局自定义股票池 code
+export type BuiltinUniverseId =
   | 'csi300'
   | 'csi500'
   | 'csi1000'
@@ -24,12 +24,15 @@ export type UniverseId =
   | 'csi800'
   | 'all_a';
 
+export type UniverseId = BuiltinUniverseId | (string & {});
+
 // Stock universe metadata from /universes API
 export interface UniverseInfo {
   id: UniverseId;
   name: string;
   indexSymbol: string | null;
   stockCount: number;
+  isSystem?: boolean;
 }
 
 // L1 factor category from /factor-categories API

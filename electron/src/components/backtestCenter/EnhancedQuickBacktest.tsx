@@ -35,6 +35,8 @@ import { strategyTemplates, getTemplateById } from '../../constants/strategyTemp
 import { blendBacktestProgress, getBacktestStageMessage } from '../backtest/progressUtils';
 import { getStoredTailTradeMode, setStoredTailTradeMode, getTailTradeDealPrice, getTailTradeSignalLagDays, ALLOW_FEATURE_SIGNAL_FALLBACK } from '../../shared/qlib/tailTradeMode';
 import { Modal } from 'antd';
+import type { StockPoolOption } from '../../services/stockPoolOptionService';
+import { StockPoolPickerModal } from '../backtest/StockPoolPickerModal';
 
 const DEFAULT_TEMPLATE_ID = 'standard_topk';
 
@@ -64,6 +66,9 @@ export const EnhancedQuickBacktest: React.FC = () => {
   const [showHistory, setShowHistory] = useState(true);
   const [isComparing, setIsComparing] = useState(false);
   const [targetType, setTargetType] = useState<'single' | 'index'>('single');
+  const [customPoolOpen, setCustomPoolOpen] = useState(false);
+  const [selectedCustomPool, setSelectedCustomPool] = useState<StockPoolOption | null>(null);
+  const customPoolActive = (backtestConfig.symbol || '').startsWith('pool:');
 
   // 尾盘交易模式开关（持久化）
   const [tailTradeEnabled, setTailTradeEnabled] = useState<boolean>(() => getStoredTailTradeMode());
@@ -252,9 +257,11 @@ export const EnhancedQuickBacktest: React.FC = () => {
     try {
       const { backtestService } = await import('../../services/backtestService');
       backtestWsBaseRef.current = (backtestService as any).wsUrl || '';
+      const symbol = backtestConfig.symbol || '';
       const response = await backtestService.runBacktest({
         ...backtestConfig,
-        symbol: backtestConfig.symbol || '',
+        symbol,
+        pool_id: symbol.startsWith('pool:') ? symbol : undefined,
         strategy_code: strategyCode,
         initial_capital: backtestConfig.initial_capital || 100000,
         user_id: backtestConfig.user_id || 'default',
@@ -417,27 +424,39 @@ export const EnhancedQuickBacktest: React.FC = () => {
             <div className="space-y-3">
               <div className="space-y-1">
                 <label className="text-sm font-medium text-gray-700">股票池 (Symbols)</label>
-                <div className="grid grid-cols-5 gap-1.5">
+                <div className="grid grid-cols-3 gap-1.5">
                   {[
                     { label: '全部', value: 'all' },
                     { label: 'HS300', value: 'csi300' },
                     { label: 'ZZ500', value: 'csi500' },
                     { label: 'ZZ800', value: 'csi800' },
                     { label: 'ZZ1000', value: 'csi1000' },
+                    { label: '自定义', value: '__custom__', custom: true },
                   ].map((preset) => {
-                    const active = backtestConfig.symbol === preset.value;
+                    const active = preset.custom
+                      ? customPoolActive
+                      : backtestConfig.symbol === preset.value;
                     return (
                       <button
                         key={preset.value}
                         type="button"
-                        onClick={() => updateBacktestConfig({ symbol: preset.value })}
+                        onClick={() => {
+                          if (preset.custom) {
+                            setCustomPoolOpen(true);
+                            return;
+                          }
+                          setSelectedCustomPool(null);
+                          updateBacktestConfig({ symbol: preset.value });
+                        }}
                         className={`px-1 py-2 text-[10px] font-bold rounded-xl border transition-all ${
                           active
                             ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
                             : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-600'
                         }`}
                       >
-                        {preset.label}
+                        {preset.custom && customPoolActive && selectedCustomPool
+                          ? selectedCustomPool.name
+                          : preset.label}
                       </button>
                     );
                   })}
@@ -570,6 +589,18 @@ export const EnhancedQuickBacktest: React.FC = () => {
           )}
         </div>
       </div>
+      <StockPoolPickerModal
+        open={customPoolOpen}
+        onClose={() => setCustomPoolOpen(false)}
+        selectedPoolId={selectedCustomPool?.pool_id}
+        market="CN"
+        title="增强回测股票池"
+        onSelect={(pool) => {
+          setSelectedCustomPool(pool);
+          updateBacktestConfig({ symbol: `pool:${pool.code}` });
+          setCustomPoolOpen(false);
+        }}
+      />
     </div>
   );
 };

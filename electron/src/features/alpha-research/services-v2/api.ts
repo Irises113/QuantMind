@@ -453,6 +453,7 @@ export async function getUniverses(): Promise<
         name: info?.name ?? UNIVERSE_LABELS[id as UniverseId] ?? id,
         indexSymbol: info?.indexSymbol ?? info?.index_symbol ?? null,
         stockCount: info?.count ?? 0,
+        isSystem: info?.is_system ?? info?.isSystem ?? true,
       }),
     );
     return makeOk({ universes });

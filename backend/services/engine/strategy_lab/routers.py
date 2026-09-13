@@ -42,6 +42,10 @@ class RunBody(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     options: dict[str, Any] = Field(default_factory=dict)
     qlib_data_path: str | None = None
+    stock_pool: str | None = Field(
+        None,
+        description="全局股票池 ref（如 pool:csi1000），注入 ctx.stock_pool 与 universe 取交集",
+    )
     drawn_lines: dict[str, float] = Field(
         default_factory=dict,
         description="User-drawn price lines from the K-line UI; readable via ctx.drawn_line(name).",
@@ -56,6 +60,7 @@ async def post_run(body: RunBody) -> dict[str, Any]:
         params=body.params,
         options=body.options,
         qlib_data_path=body.qlib_data_path,
+        stock_pool=body.stock_pool,
         drawn_lines=body.drawn_lines or {},
     )
     result = await run_sync(req, timeout_sec=body.timeout_sec)
@@ -69,6 +74,7 @@ async def post_run_async(body: RunBody) -> dict[str, Any]:
         params=body.params,
         options=body.options,
         qlib_data_path=body.qlib_data_path,
+        stock_pool=body.stock_pool,
         drawn_lines=body.drawn_lines or {},
     )
     run_id = await submit_run(req, timeout_sec=body.timeout_sec)

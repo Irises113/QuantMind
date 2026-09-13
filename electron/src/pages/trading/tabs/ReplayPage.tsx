@@ -33,6 +33,10 @@ import { modelTrainingService, type SystemModelRecord, type UserModelRecord } fr
 import { modelDisplayName, getMeta, getMetrics, extractModelTypeShort } from '../../modelRegistryUtils';
 import { useAutoAdvance, type AutoAdvanceSpeed, type DailyRecord } from '../../../hooks/useAutoAdvance';
 import ReplayReportPage from './ReplayReportPage';
+import {
+  StockPoolSelectField,
+  type StockPoolSelection,
+} from '../../../components/backtest/StockPoolSelectField';
 
 // ---------------------------------------------------------------------------
 // Status badge
@@ -105,6 +109,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
     const [initialCash, setInitialCash] = useState('1000000');
     const [stopLossPct, setStopLossPct] = useState('');
     const [paramOverrides, setParamOverrides] = useState<Record<string, unknown>>({});
+    const [stockPool, setStockPool] = useState<StockPoolSelection | null>(null);
 
     // Step 4: Mode
     const [autoTrade, setAutoTrade] = useState(true);
@@ -176,7 +181,11 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
     // Build final strategy_params from template replay_params + overrides
     const buildStrategyParams = (): Record<string, unknown> => {
         const base = selectedTemplate ? { ...selectedTemplate.replay_params } : {};
-        return { ...base, ...paramOverrides };
+        const merged = { ...base, ...paramOverrides };
+        if (stockPool?.ref) {
+            merged.pool_id = stockPool.ref;
+        }
+        return merged;
     };
 
     // Build final stop_loss_pct
@@ -437,6 +446,16 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
             <section className="h-full rounded-2xl border border-slate-200/80 bg-white shadow-xs overflow-hidden">
                 <SectionTitle icon={Settings2} title="推演参数" />
                 <div className="px-4 py-3">
+                <div className="mb-3">
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">股票池（可选）</label>
+                    <StockPoolSelectField
+                        value={stockPool}
+                        onChange={setStockPool}
+                        title="时光回放股票池"
+                        compact
+                    />
+                    <p className="mt-1 text-[10px] text-slate-400">限定信号只在池成分内；留空则不过滤</p>
+                </div>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                     <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1.5">起始日</label>
@@ -553,6 +572,8 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
                         <span className="text-slate-700 font-semibold font-mono">{parseFloat(initialCash || '0').toLocaleString('zh-CN')}</span>
                         <span className="text-slate-400 font-medium">止损</span>
                         <span className="text-slate-700 font-semibold">{finalStopLoss != null ? `${(finalStopLoss * 100).toFixed(1)}%` : '无'}</span>
+                        <span className="text-slate-400 font-medium">股票池</span>
+                        <span className="text-slate-700 font-semibold truncate">{stockPool?.name ?? '全市场'}</span>
                     </div>
 
                     {Object.keys(finalParams).length > 0 && (

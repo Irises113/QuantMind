@@ -125,6 +125,13 @@ const LiveTradeConfigWizard: React.FC<Props> = ({
         label: '风控',
         value: `大跌拦截 ${((executionConfig.max_buy_drop || 0) * 100).toFixed(1)}%，止损 ${((executionConfig.stop_loss || 0) * 100).toFixed(1)}%`,
       },
+      {
+        label: '股票池',
+        value: liveTradeConfig.pool_name?.trim()
+          || (liveTradeConfig.pool_id?.trim()
+            ? liveTradeConfig.pool_id.replace(/^pool:/, '')
+            : '全市场（不限定）'),
+      },
     ],
     [strategyId, strategyName, modeLabel, orderTypeLabel, liveTradeConfig, executionConfig],
   );
@@ -159,19 +166,18 @@ const LiveTradeConfigWizard: React.FC<Props> = ({
       title="模拟执行参数"
       open={open}
       onCancel={onCancel}
-      width={860}
+      width={920}
       footer={null}
       destroyOnHidden
-      centered={step > 0}
-      style={step === 0 ? { top: 24 } : undefined}
+      centered
       styles={{
         body: {
-          paddingTop: 16,
-          paddingBottom: 16,
+          paddingTop: 12,
+          paddingBottom: 12,
         },
       }}
     >
-      <div className={`flex flex-col ${step === 0 ? 'min-h-[560px]' : step === 1 ? 'min-h-[420px]' : 'min-h-[260px]'}`}>
+      <div className={`flex flex-col ${step === 0 ? 'min-h-0' : step === 1 ? 'min-h-[320px]' : 'min-h-[200px]'}`}>
         <Steps
           current={step}
           items={[
@@ -181,25 +187,19 @@ const LiveTradeConfigWizard: React.FC<Props> = ({
           ]}
         />
 
-        <div
-          className="flex-1 transition-[min-height] duration-300 ease-out"
-          style={{ minHeight: step === 0 ? 620 : step === 1 ? 240 : 80 }}
-        >
+        <div className="flex-1">
           {step === 0 && (
-            <div className="pt-3 space-y-2.5 animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
+            <div className="pt-2 space-y-2 animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
               <Alert
                 type="info"
                 showIcon
-                message={`策略 ${strategyName || strategyId} 首次模拟交易前需要确认调仓节奏与买卖时点`}
+                className="!py-1.5 !px-3 [&_.ant-alert-message]:!text-xs"
+                message={`策略 ${strategyName || strategyId}：确认调仓节奏与买卖时点`}
               />
               {tips.length > 0 && (
-                <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-2.5 text-sm text-blue-900">
-                  <div className="mb-1.5 font-semibold">推荐说明</div>
-                  <ul className="list-disc pl-5 space-y-1">
-                    {tips.map((tip, idx) => (
-                      <li key={`${strategyId}-tip-${idx}`}>{tip}</li>
-                    ))}
-                  </ul>
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-1.5 text-[11px] text-blue-900">
+                  <span className="font-semibold">推荐：</span>
+                  {tips.join(' · ')}
                 </div>
               )}
               <LiveTradeConfigForm

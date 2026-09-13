@@ -41,3 +41,13 @@ export async function listStockPoolOptions(params?: {
   const items = (resp.data?.items || []) as StockPoolOption[];
   return items;
 }
+
+export async function getStockPoolMembers(poolId: string): Promise<string[]> {
+  const token = authService.getAccessToken();
+  const resp = await axios.get(`${baseURL()}/stock-pools/${encodeURIComponent(poolId)}/members`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    timeout: 30000,
+  });
+  const symbols = (resp.data?.symbols || resp.data?.items || []) as string[];
+  return Array.isArray(symbols) ? symbols : [];
+}

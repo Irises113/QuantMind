@@ -1,6 +1,10 @@
 import React from 'react';
 import type { ExecutionConfig, LiveTradeConfig, TradeWeekday, TradingSession } from '../../../types/liveTrading';
 import type { ValidationIssue } from '../utils/liveTradeConfigValidation';
+import {
+  StockPoolSelectField,
+  type StockPoolSelection,
+} from '../../../components/backtest/StockPoolSelectField';
 
 type Props = {
   executionConfig: ExecutionConfig;
@@ -35,7 +39,11 @@ const fieldError = (issues: ValidationIssue[] | undefined, field: string) =>
   issues?.find((item) => item.field === field)?.message;
 
 const controlClassName =
-  'w-full rounded-2xl border border-gray-300 bg-white px-4 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500';
+  'w-full rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500';
+
+const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="mb-1.5 text-xs font-semibold text-gray-800">{children}</div>
+);
 
 const LiveTradeConfigForm: React.FC<Props> = ({
   executionConfig,
@@ -64,83 +72,94 @@ const LiveTradeConfigForm: React.FC<Props> = ({
     updateLive({ schedule_type: value });
   };
 
-  return (
-    <div className="space-y-3">
-      <section className="rounded-2xl border border-gray-200 p-3.5 md:p-4">
-        <div className="mb-2.5 font-semibold text-gray-900">调仓节奏</div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label>
-            <div className="mb-1 text-sm">调度方式</div>
-            <select
-              className={controlClassName}
-              value={liveTradeConfig.schedule_type}
-              onChange={(e) => handleScheduleTypeChange(e.target.value as LiveTradeConfig['schedule_type'])}
-            >
-              <option value="interval">按交易日间隔</option>
-              <option value="weekly">按周执行</option>
-            </select>
-          </label>
+  const poolRef = liveTradeConfig.pool_id?.trim() || null;
+  const poolSelection: StockPoolSelection | null = poolRef
+    ? {
+        poolId: null,
+        code: poolRef.replace(/^pool:/, ''),
+        name: liveTradeConfig.pool_name?.trim() || poolRef.replace(/^pool:/, ''),
+        ref: poolRef,
+      }
+    : null;
 
-          {liveTradeConfig.schedule_type === 'interval' ? (
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_168px] gap-2.5 items-start">
+      {/* 左侧：执行参数 */}
+      <div className="space-y-2 min-w-0">
+        <section className="rounded-xl border border-gray-200 p-2.5">
+          <SectionTitle>调仓节奏</SectionTitle>
+          <div className="grid grid-cols-2 gap-2">
             <label>
-              <div className="mb-1 text-sm">调仓周期</div>
+              <div className="mb-0.5 text-[11px] text-gray-500">调度方式</div>
               <select
                 className={controlClassName}
-                value={liveTradeConfig.rebalance_days || 3}
-                onChange={(e) => updateLive({ rebalance_days: Number(e.target.value) as 1 | 3 | 5 | 10 | 20 })}
+                value={liveTradeConfig.schedule_type}
+                onChange={(e) => handleScheduleTypeChange(e.target.value as LiveTradeConfig['schedule_type'])}
               >
-                {[1, 3, 5, 10, 20].map((v) => (
-                  <option key={v} value={v}>
-                    每 {v} 个交易日
-                  </option>
-                ))}
+                <option value="interval">按交易日间隔</option>
+                <option value="weekly">按周执行</option>
               </select>
-              {fieldError(validationIssues, 'rebalance_days') && (
-                <div className="text-xs text-red-500 mt-1">{fieldError(validationIssues, 'rebalance_days')}</div>
-              )}
             </label>
-          ) : (
-            <div>
-              <div className="mb-1 text-sm">每周调仓日（可多选）</div>
-              <div className="flex flex-wrap gap-2">
-                {WEEKDAYS.map((day) => {
-                  const selected = !!liveTradeConfig.trade_weekdays?.includes(day);
-                  return (
-                    <button
-                      type="button"
-                      key={day}
-                      className={`rounded-2xl border px-3.5 py-2 text-sm transition-colors ${
-                        selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-300 bg-white text-gray-700'
-                      }`}
-                      onClick={() => {
-                        const current = liveTradeConfig.trade_weekdays || [];
-                        updateLive({
-                          trade_weekdays: selected ? current.filter((item) => item !== day) : [...current, day],
-                        });
-                      }}
-                    >
-                      {day}
-                    </button>
-                  );
-                })}
-              </div>
-              {fieldError(validationIssues, 'trade_weekdays') && (
-                <div className="text-xs text-red-500 mt-1">{fieldError(validationIssues, 'trade_weekdays')}</div>
-              )}
-            </div>
-          )}
-        </div>
 
-        <div className="mt-3">
-          <div className="mb-1 text-sm">执行时段</div>
-          <div className="flex gap-2">
+            {liveTradeConfig.schedule_type === 'interval' ? (
+              <label>
+                <div className="mb-0.5 text-[11px] text-gray-500">调仓周期</div>
+                <select
+                  className={controlClassName}
+                  value={liveTradeConfig.rebalance_days || 3}
+                  onChange={(e) => updateLive({ rebalance_days: Number(e.target.value) as 1 | 3 | 5 | 10 | 20 })}
+                >
+                  {[1, 3, 5, 10, 20].map((v) => (
+                    <option key={v} value={v}>
+                      每 {v} 个交易日
+                    </option>
+                  ))}
+                </select>
+                {fieldError(validationIssues, 'rebalance_days') && (
+                  <div className="text-[10px] text-red-500 mt-0.5">{fieldError(validationIssues, 'rebalance_days')}</div>
+                )}
+              </label>
+            ) : (
+              <div>
+                <div className="mb-0.5 text-[11px] text-gray-500">每周调仓日</div>
+                <div className="flex flex-wrap gap-1">
+                  {WEEKDAYS.map((day) => {
+                    const selected = !!liveTradeConfig.trade_weekdays?.includes(day);
+                    return (
+                      <button
+                        type="button"
+                        key={day}
+                        className={`rounded-lg border px-2 py-0.5 text-[11px] transition-colors ${
+                          selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-300 bg-white text-gray-700'
+                        }`}
+                        onClick={() => {
+                          const current = liveTradeConfig.trade_weekdays || [];
+                          updateLive({
+                            trade_weekdays: selected ? current.filter((item) => item !== day) : [...current, day],
+                          });
+                        }}
+                      >
+                        {day}
+                      </button>
+                    );
+                  })}
+                </div>
+                {fieldError(validationIssues, 'trade_weekdays') && (
+                  <div className="text-[10px] text-red-500 mt-0.5">{fieldError(validationIssues, 'trade_weekdays')}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-gray-500 shrink-0">执行时段</span>
             {SESSIONS.map((session) => {
               const selected = liveTradeConfig.enabled_sessions.includes(session);
               return (
                 <button
                   type="button"
                   key={session}
-                  className={`rounded-2xl border px-4 py-2 text-sm transition-colors ${
+                  className={`rounded-lg border px-2.5 py-0.5 text-[11px] transition-colors ${
                     selected ? 'border-slate-900 bg-slate-900 text-white' : 'border-gray-300 bg-white text-gray-700'
                   }`}
                   onClick={() => {
@@ -149,7 +168,6 @@ const LiveTradeConfigForm: React.FC<Props> = ({
                       ? current.filter((item) => item !== session)
                       : [...current, session]) as TradingSession[];
 
-                    // Auto-adjust sell/buy times if they no longer fall in the new session set
                     const patch: Partial<LiveTradeConfig> = { enabled_sessions: next };
                     if (next.length > 0) {
                       const key = [...next].sort().join(',');
@@ -160,7 +178,6 @@ const LiveTradeConfigForm: React.FC<Props> = ({
                       if (!isTimeInSessions(liveTradeConfig.buy_time, next)) {
                         patch.buy_time = defaults.buy_time;
                       }
-                      // Ensure sell_time < buy_time after reset
                       const newSell = patch.sell_time ?? liveTradeConfig.sell_time;
                       const newBuy = patch.buy_time ?? liveTradeConfig.buy_time;
                       if (newSell >= newBuy) {
@@ -175,175 +192,174 @@ const LiveTradeConfigForm: React.FC<Props> = ({
                 </button>
               );
             })}
+            {liveTradeConfig.enabled_sessions.length > 0 && (
+              <span className="text-[10px] text-gray-400">
+                {liveTradeConfig.enabled_sessions
+                  .sort()
+                  .map((s) => `${SESSION_RANGES[s][0]}–${SESSION_RANGES[s][1]}`)
+                  .join(' / ')}
+              </span>
+            )}
           </div>
           {fieldError(validationIssues, 'enabled_sessions') && (
-            <div className="text-xs text-red-500 mt-1">{fieldError(validationIssues, 'enabled_sessions')}</div>
+            <div className="text-[10px] text-red-500 mt-0.5">{fieldError(validationIssues, 'enabled_sessions')}</div>
           )}
-          {liveTradeConfig.enabled_sessions.length > 0 && (
-            <div className="mt-1 text-xs text-gray-400">
-              可用时间段：
-              {liveTradeConfig.enabled_sessions
-                .sort()
-                .map((s) => `${s === 'AM' ? '上午' : '下午'} ${SESSION_RANGES[s][0]}–${SESSION_RANGES[s][1]}`)
-                .join('，')}
-            </div>
-          )}
-        </div>
-      </section>
+        </section>
 
-      <section className="rounded-2xl border border-gray-200 p-3.5 md:p-4">
-        <div className="mb-2.5 font-semibold text-gray-900">买卖时点</div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_200px]">
-          <label>
-            <div className="mb-1 text-sm">卖出时间</div>
-            <input
-              type="time"
-              className={`${controlClassName} h-11 ${!isTimeInSessions(liveTradeConfig.sell_time, liveTradeConfig.enabled_sessions) ? 'border-red-500 bg-red-50' : ''}`}
-              value={liveTradeConfig.sell_time}
-              min={liveTradeConfig.enabled_sessions.includes('AM') ? '09:00' : '13:00'}
-              max={liveTradeConfig.enabled_sessions.includes('PM') ? '15:00' : '11:30'}
-              onChange={(e) => {
-                const val = e.target.value;
-                updateLive({ sell_time: val });
-              }}
-            />
-            {!isTimeInSessions(liveTradeConfig.sell_time, liveTradeConfig.enabled_sessions) && (
-              <div className="text-xs text-red-500 mt-1">卖出时间必须在所选执行时段内</div>
-            )}
-            {fieldError(validationIssues, 'sell_time') && (
-              <div className="text-xs text-red-500 mt-1">{fieldError(validationIssues, 'sell_time')}</div>
-            )}
-          </label>
-
-          <label>
-            <div className="mb-1 text-sm">买入时间</div>
-            <input
-              type="time"
-              className={`${controlClassName} h-11 ${!isTimeInSessions(liveTradeConfig.buy_time, liveTradeConfig.enabled_sessions) ? 'border-red-500 bg-red-50' : ''}`}
-              value={liveTradeConfig.buy_time}
-              min={liveTradeConfig.enabled_sessions.includes('AM') ? '09:00' : '13:00'}
-              max={liveTradeConfig.enabled_sessions.includes('PM') ? '15:00' : '11:30'}
-              onChange={(e) => {
-                const val = e.target.value;
-                updateLive({ buy_time: val });
-              }}
-            />
-            {!isTimeInSessions(liveTradeConfig.buy_time, liveTradeConfig.enabled_sessions) && (
-              <div className="text-xs text-red-500 mt-1">买入时间必须在所选执行时段内</div>
-            )}
-            {fieldError(validationIssues, 'buy_time') && (
-              <div className="text-xs text-red-500 mt-1">{fieldError(validationIssues, 'buy_time')}</div>
-            )}
-          </label>
-
-          <label>
-            <div className="mb-1 text-sm">执行顺序</div>
-            <div className="flex h-11 items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4">
+        <section className="rounded-xl border border-gray-200 p-2.5">
+          <SectionTitle>买卖时点</SectionTitle>
+          <div className="grid grid-cols-3 gap-2">
+            <label>
+              <div className="mb-0.5 text-[11px] text-gray-500">卖出</div>
               <input
-                type="checkbox"
-                checked={liveTradeConfig.sell_first}
-                onChange={(e) => updateLive({ sell_first: e.target.checked })}
+                type="time"
+                className={`${controlClassName} h-8 ${!isTimeInSessions(liveTradeConfig.sell_time, liveTradeConfig.enabled_sessions) ? 'border-red-500 bg-red-50' : ''}`}
+                value={liveTradeConfig.sell_time}
+                min={liveTradeConfig.enabled_sessions.includes('AM') ? '09:00' : '13:00'}
+                max={liveTradeConfig.enabled_sessions.includes('PM') ? '15:00' : '11:30'}
+                onChange={(e) => updateLive({ sell_time: e.target.value })}
               />
-              <span className="text-sm">先卖后买</span>
-            </div>
-          </label>
-        </div>
-      </section>
+              {fieldError(validationIssues, 'sell_time') && (
+                <div className="text-[10px] text-red-500 mt-0.5">{fieldError(validationIssues, 'sell_time')}</div>
+              )}
+            </label>
 
-      <section className="rounded-2xl border border-gray-200 p-3.5 md:p-4">
-        <div className="mb-2.5 font-semibold text-gray-900">委托执行</div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <label>
-            <div className="mb-1 text-sm">委托方式</div>
-            <select
-              className={controlClassName}
-              value={liveTradeConfig.order_type}
-              onChange={(e) => updateLive({ order_type: e.target.value as LiveTradeConfig['order_type'] })}
-            >
-              <option value="LIMIT">限价</option>
-              <option value="MARKET">市价</option>
-            </select>
-          </label>
-
-          <label>
-            <div className="mb-1 text-sm">价格偏离容忍</div>
-            <div className="relative">
+            <label>
+              <div className="mb-0.5 text-[11px] text-gray-500">买入</div>
               <input
-                type="number"
-                min={0}
-                max={5}
-                step={0.5}
-                className={`${controlClassName} pr-10 disabled:bg-gray-50 disabled:text-gray-400`}
-                value={typeof liveTradeConfig.max_price_deviation === 'number'
-                  ? Number((liveTradeConfig.max_price_deviation * 100).toFixed(2))
-                  : 2}
-                onChange={(e) => updateLive({ max_price_deviation: Number(e.target.value) / 100 })}
-                disabled={liveTradeConfig.order_type !== 'LIMIT'}
+                type="time"
+                className={`${controlClassName} h-8 ${!isTimeInSessions(liveTradeConfig.buy_time, liveTradeConfig.enabled_sessions) ? 'border-red-500 bg-red-50' : ''}`}
+                value={liveTradeConfig.buy_time}
+                min={liveTradeConfig.enabled_sessions.includes('AM') ? '09:00' : '13:00'}
+                max={liveTradeConfig.enabled_sessions.includes('PM') ? '15:00' : '11:30'}
+                onChange={(e) => updateLive({ buy_time: e.target.value })}
               />
-              <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm text-gray-400">%</span>
-            </div>
-            {fieldError(validationIssues, 'max_price_deviation') && (
-              <div className="text-xs text-red-500 mt-1">{fieldError(validationIssues, 'max_price_deviation')}</div>
-            )}
-          </label>
+              {fieldError(validationIssues, 'buy_time') && (
+                <div className="text-[10px] text-red-500 mt-0.5">{fieldError(validationIssues, 'buy_time')}</div>
+              )}
+            </label>
 
-          <label>
-            <div className="mb-1 text-sm">单轮最大委托数</div>
-            <input
-              type="number"
-              min={1}
-              max={100}
-              className={controlClassName}
-              value={liveTradeConfig.max_orders_per_cycle}
-              onChange={(e) => updateLive({ max_orders_per_cycle: Number(e.target.value) })}
-            />
-            {fieldError(validationIssues, 'max_orders_per_cycle') && (
-              <div className="text-xs text-red-500 mt-1">{fieldError(validationIssues, 'max_orders_per_cycle')}</div>
-            )}
-          </label>
-        </div>
-      </section>
+            <label>
+              <div className="mb-0.5 text-[11px] text-gray-500">顺序</div>
+              <div className="flex h-8 items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-2.5">
+                <input
+                  type="checkbox"
+                  className="scale-90"
+                  checked={liveTradeConfig.sell_first}
+                  onChange={(e) => updateLive({ sell_first: e.target.checked })}
+                />
+                <span className="text-[11px]">先卖后买</span>
+              </div>
+            </label>
+          </div>
+        </section>
 
-      <section className="rounded-2xl border border-gray-200 p-3.5 md:p-4">
-        <div className="mb-2.5 font-semibold text-gray-900">风险保护</div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label>
-            <div className="mb-1 text-sm">日内大跌拦截</div>
-            <div className="relative">
-              <input
-                type="number"
-                min={-10}
-                max={-1}
-                step={0.5}
-                className={`${controlClassName} pr-10`}
-                value={typeof executionConfig.max_buy_drop === 'number'
-                  ? Number((executionConfig.max_buy_drop * 100).toFixed(2))
-                  : -3}
-                onChange={(e) => updateExec({ max_buy_drop: Number(e.target.value) / 100 })}
-              />
-              <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm text-gray-400">%</span>
+        <section className="rounded-xl border border-gray-200 p-2.5">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+            <div>
+              <SectionTitle>委托执行</SectionTitle>
+              <div className="grid grid-cols-3 gap-1.5">
+                <label>
+                  <div className="mb-0.5 text-[11px] text-gray-500">方式</div>
+                  <select
+                    className={controlClassName}
+                    value={liveTradeConfig.order_type}
+                    onChange={(e) => updateLive({ order_type: e.target.value as LiveTradeConfig['order_type'] })}
+                  >
+                    <option value="LIMIT">限价</option>
+                    <option value="MARKET">市价</option>
+                  </select>
+                </label>
+                <label>
+                  <div className="mb-0.5 text-[11px] text-gray-500">偏离</div>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min={0}
+                      max={5}
+                      step={0.5}
+                      className={`${controlClassName} pr-7 disabled:bg-gray-50 disabled:text-gray-400`}
+                      value={typeof liveTradeConfig.max_price_deviation === 'number'
+                        ? Number((liveTradeConfig.max_price_deviation * 100).toFixed(2))
+                        : 2}
+                      onChange={(e) => updateLive({ max_price_deviation: Number(e.target.value) / 100 })}
+                      disabled={liveTradeConfig.order_type !== 'LIMIT'}
+                    />
+                    <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-gray-400">%</span>
+                  </div>
+                </label>
+                <label>
+                  <div className="mb-0.5 text-[11px] text-gray-500">最大单数</div>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    className={controlClassName}
+                    value={liveTradeConfig.max_orders_per_cycle}
+                    onChange={(e) => updateLive({ max_orders_per_cycle: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
             </div>
-          </label>
+            <div>
+              <SectionTitle>风险保护</SectionTitle>
+              <div className="grid grid-cols-2 gap-1.5">
+                <label>
+                  <div className="mb-0.5 text-[11px] text-gray-500">大跌拦截</div>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min={-10}
+                      max={-1}
+                      step={0.5}
+                      className={`${controlClassName} pr-7`}
+                      value={typeof executionConfig.max_buy_drop === 'number'
+                        ? Number((executionConfig.max_buy_drop * 100).toFixed(2))
+                        : -3}
+                      onChange={(e) => updateExec({ max_buy_drop: Number(e.target.value) / 100 })}
+                    />
+                    <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-gray-400">%</span>
+                  </div>
+                </label>
+                <label>
+                  <div className="mb-0.5 text-[11px] text-gray-500">全局止损</div>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min={-20}
+                      max={-3}
+                      step={0.5}
+                      className={`${controlClassName} pr-7`}
+                      value={typeof executionConfig.stop_loss === 'number'
+                        ? Number((executionConfig.stop_loss * 100).toFixed(2))
+                        : -8}
+                      onChange={(e) => updateExec({ stop_loss: Number(e.target.value) / 100 })}
+                    />
+                    <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-gray-400">%</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
 
-          <label>
-            <div className="mb-1 text-sm">全局止损</div>
-            <div className="relative">
-              <input
-                type="number"
-                min={-20}
-                max={-3}
-                step={0.5}
-                className={`${controlClassName} pr-10`}
-                value={typeof executionConfig.stop_loss === 'number'
-                  ? Number((executionConfig.stop_loss * 100).toFixed(2))
-                  : -8}
-                onChange={(e) => updateExec({ stop_loss: Number(e.target.value) / 100 })}
-              />
-              <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm text-gray-400">%</span>
-            </div>
-          </label>
-        </div>
-      </section>
+      {/* 右侧：股票池 */}
+      <aside className="rounded-xl border border-gray-200 bg-slate-50/50 p-2.5 md:sticky md:top-0">
+        <SectionTitle>股票池</SectionTitle>
+        <p className="mb-2 text-[10px] leading-snug text-gray-500">
+          可选。留空则不过滤信号。
+        </p>
+        <StockPoolSelectField
+          value={poolSelection}
+          onChange={(next) =>
+            updateLive({ pool_id: next?.ref || null, pool_name: next?.name || null })
+          }
+          title="实盘交易股票池"
+          compact
+          stacked
+        />
+      </aside>
     </div>
   );
 };

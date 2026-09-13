@@ -74,6 +74,7 @@ def run_request(req: dict[str, Any]) -> int:
     code: str = req["code"]
     params: dict[str, Any] = req.get("params") or {}
     qlib_data_path: str | None = req.get("qlib_data_path")
+    stock_pool: str | None = req.get("stock_pool")
     drawn_lines: dict[str, Any] = req.get("drawn_lines") or {}
 
     publisher = ProgressPublisher(run_id=run_id)
@@ -89,6 +90,8 @@ def run_request(req: dict[str, Any]) -> int:
         provider = _resolve_provider(req, qlib_data_path)
 
         ctx = Context()
+        if stock_pool and str(stock_pool).strip():
+            ctx.stock_pool = str(stock_pool).strip()
         for k, v in params.items():
             try:
                 ctx.set_param(k, v)

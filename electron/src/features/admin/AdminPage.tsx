@@ -63,9 +63,9 @@ const AdminPage: React.FC = () => {
             icon: <RocketOutlined />,
             label: '训练服务',
             children: [
-                { key: 'autodl-nodes', label: 'AutoDL 节点' },
-                { key: 'training-datasets', label: '模型训练数据集' },
                 { key: 'feature-catalog', label: '特征字典' },
+                { key: 'training-datasets', label: '模型训练数据集' },
+                { key: 'autodl-nodes', label: 'AutoDL 节点' },
             ]
         },
         { type: 'divider' as const },

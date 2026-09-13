@@ -34,6 +34,47 @@ persistence = RDAgentFactorPersistence()
 # 与 quantdb_hub.UNIVERSE_MAP / Strategy Lab 白名单同源，不再各写一份。
 _VALID_CN_UNIVERSES: list[str] = list(cn_index_symbols().keys())
 
+
+def _normalize_pool_ref(universe: str) -> str:
+    u = (universe or "").strip()
+    if not u:
+        return "pool:csi300"
+    if u.startswith(("pool:", "pool_id:", "list:", "file:")):
+        return u
+    return f"pool:{u}"
+
+
+def _universe_is_valid(universe: str) -> bool:
+    if universe in _VALID_CN_UNIVERSES:
+        return True
+    try:
+        from backend.shared.stock_pool.resolver import resolve_pool_sync
+
+        snap = resolve_pool_sync(_normalize_pool_ref(universe))
+        return bool(snap.unfiltered or snap.symbols)
+    except Exception:
+        return False
+
+
+def _resolve_custom_pool_instruments(universe: str) -> list[str] | None:
+    """非内置 code 时尝试全局股票池解析；内置池返回 None 走原逻辑。"""
+    if universe in _VALID_CN_UNIVERSES:
+        return None
+    try:
+        from backend.shared.stock_pool.resolver import resolve_pool_sync
+        from backend.shared.stock_utils import StockCodeUtil
+
+        snap = resolve_pool_sync(_normalize_pool_ref(universe))
+        if snap.unfiltered:
+            return None
+        if not snap.symbols:
+            return []
+        return sorted({StockCodeUtil.to_prefix(s) for s in snap.symbols})
+    except Exception as e:
+        logger.warning("custom pool %s resolve failed: %s", universe, e)
+        return None
+
+
 _running_backtests: set[str] = set()
 # 回测子进程句柄 + 取消标记：cancel 接口据此真正 kill 子进程
 _backtest_processes: dict[str, subprocess.Popen] = {}
@@ -210,12 +251,15 @@ async def start_evolution(
             detail=f"Unknown market: {market}. Available: {available}",
         ) from e
 
-    # Validate universe
-    valid_universes = _VALID_CN_UNIVERSES
-    if universe not in valid_universes:
+    # Validate universe（内置指数 + 全局自定义股票池）
+    if market == "a_share" and not _universe_is_valid(universe):
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown universe: {universe}. Available: {valid_universes}",
+            detail=(
+                f"Unknown universe: {universe}. "
+                f"Available builtins: {_VALID_CN_UNIVERSES}, "
+                "or any active global/custom pool code from /stock-pools/options"
+            ),
         )
 
     llm_config, llm_source = await _resolve_effective_llm_config(auth_user_id, auth_tenant_id)
@@ -728,17 +772,69 @@ async def get_factor_categories():
 
 
 @router.get("/universes")
-async def get_universes():
-    """返回可用股票池及股票数"""
+async def get_universes(request: Request):
+    """返回可用股票池及股票数（内置指数 + 用户可见的全局自定义池）"""
+    universes: dict[str, dict] = {}
     try:
         from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
         hub = QuantDBDataHub.get_instance()
         summary = hub.get_data_summary()
-        universes = summary.get("universes", {})
-        return {"code": 200, "data": {"universes": universes}}
+        for code, meta in (summary.get("universes") or {}).items():
+            universes[code] = {
+                "count": meta.get("count", 0) if isinstance(meta, dict) else 0,
+                "indexSymbol": meta.get("indexSymbol") if isinstance(meta, dict) else None,
+                "is_system": True,
+            }
     except Exception as e:
-        logger.warning("Failed to get universes: %s", e)
-        return {"code": 200, "data": {"universes": {}}}
+        logger.warning("Failed to get builtin universes: %s", e)
+
+    try:
+        from sqlalchemy import text
+
+        from backend.shared.database_manager_v2 import get_session
+        from backend.shared.stock_pool import repository as pool_repo
+
+        user_id, tenant_id = get_authenticated_identity(request)
+        async with get_session() as session:
+            await pool_repo.ensure_tables(session)
+            rows = (
+                (
+                    await session.execute(
+                        text(
+                            """
+                    SELECT code, name, symbol_count, is_system
+                      FROM qm_stock_pool
+                     WHERE status <> 'archived'
+                       AND market = 'CN'
+                       AND (
+                            scope = 'global'
+                            OR (scope = 'tenant' AND tenant_id = :tenant_id)
+                            OR (scope = 'user' AND owner_user_id = :user_id)
+                       )
+                     ORDER BY is_system DESC, code ASC
+                    """
+                        ),
+                        {"tenant_id": tenant_id, "user_id": user_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        for row in rows:
+            code = str(row["code"])
+            if code in universes and row["is_system"]:
+                continue
+            universes[code] = {
+                "count": int(row["symbol_count"] or 0),
+                "indexSymbol": None,
+                "is_system": bool(row["is_system"]),
+                "name": str(row["name"] or code),
+            }
+    except Exception as e:
+        logger.warning("Failed to merge custom stock pools: %s", e)
+
+    return {"code": 200, "data": {"universes": universes}}
 
 
 @router.get("/llm-config")
@@ -891,6 +987,9 @@ def _resolve_instruments_for_universe(
     from qlib.data import D
 
     if market_upper == "CN":
+        custom = _resolve_custom_pool_instruments(universe)
+        if custom is not None:
+            return custom
         if universe in _QLIB_NATIVE_UNIVERSES:
             return D.instruments(market=universe)
         try:

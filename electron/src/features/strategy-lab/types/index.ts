@@ -92,6 +92,8 @@ export interface StrategyLabRunRequest {
   params?: Record<string, unknown>;
   options?: Record<string, unknown>;
   qlib_data_path?: string | null;
+  /** 全局股票池 ref，如 pool:csi1000 */
+  stock_pool?: string | null;
   drawn_lines?: Record<string, number>;
   timeout_sec?: number | null;
 }

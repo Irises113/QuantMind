@@ -13,6 +13,10 @@ import StrategyLabResultPanel from '../components/StrategyLabResultPanel';
 import StrategyLabAiDrawer from '../components/StrategyLabAiDrawer';
 import StrategyLabShell from '../components/StrategyLabShell';
 import StrategyLabSidebar from '../components/StrategyLabSidebar';
+import {
+  StockPoolSelectField,
+  type StockPoolSelection,
+} from '../../../components/backtest/StockPoolSelectField';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -44,6 +48,7 @@ const StrategyLabPage: React.FC = () => {
   const [drawnLines, setDrawnLines] = useState<Record<string, number>>({});
   const [currentStrategyName, setCurrentStrategyName] = useState<string | null>(null);
   const [currentStrategyId, setCurrentStrategyId] = useState<string | null>(null);
+  const [stockPool, setStockPool] = useState<StockPoolSelection | null>(null);
 
   const handleEditorMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;
@@ -117,7 +122,11 @@ const StrategyLabPage: React.FC = () => {
     setPhaseMsg('提交中…');
 
     try {
-      const submitResp = await strategyLabService.submit({ code, drawn_lines: drawnLines });
+      const submitResp = await strategyLabService.submit({
+        code,
+        drawn_lines: drawnLines,
+        stock_pool: stockPool?.ref || null,
+      });
       setRunId(submitResp.run_id);
       setPhaseMsg(`run_id=${submitResp.run_id.slice(0, 8)}…`);
 
@@ -153,7 +162,7 @@ const StrategyLabPage: React.FC = () => {
       const detail = err?.response?.data?.detail || err?.message || '提交失败';
       message.error(`提交失败: ${detail}`);
     }
-  }, [code, running, stopPolling, drawnLines]);
+  }, [code, running, stopPolling, drawnLines, stockPool]);
 
   const handleStop = useCallback(() => {
     stopPolling();
@@ -213,9 +222,17 @@ const StrategyLabPage: React.FC = () => {
                   <Tag color="blue" className="!rounded-full !text-[11px]">Sprint 1 · Day 19</Tag>
                   {runId && <Tag className="!rounded-full !text-[11px]">run_id: {runId.slice(0, 8)}…</Tag>}
                 </Space>
-                <Text type="secondary" className="!text-[11px]">
-                  使用 Python SDK · 子进程沙箱 · Redis 进度
-                </Text>
+                <Space size="small" align="center">
+                  <Text type="secondary" className="!text-[11px]">
+                    使用 Python SDK · 子进程沙箱 · Redis 进度
+                  </Text>
+                  <StockPoolSelectField
+                    value={stockPool}
+                    onChange={setStockPool}
+                    title="Strategy Lab 股票池"
+                    compact
+                  />
+                </Space>
               </div>
               {(running || pct > 0) && (
                 <div className="mt-2">

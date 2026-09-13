@@ -37,8 +37,12 @@ import {
   UploadOutlined,
   DownloadOutlined,
   CheckCircleOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
 import type { UploadFile } from 'antd/es/upload/interface';
+import { StockPoolPickerModal } from '../../../components/backtest/StockPoolPickerModal';
+import { getStockPoolMembers, type StockPoolOption } from '../../../services/stockPoolOptionService';
+import { toSuffixCode } from '../../../utils/portfolioUtils';
 
 const { Title, Text, Paragraph } = Typography;
 const { Search } = Input;
@@ -154,6 +158,8 @@ export const StockPoolSelector: React.FC<StockPoolSelectorProps> = ({
   const [isImportModalVisible, setIsImportModalVisible] = useState(false);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [importedData, setImportedData] = useState<string[]>([]);
+  const [globalPoolOpen, setGlobalPoolOpen] = useState(false);
+  const [globalPoolLoading, setGlobalPoolLoading] = useState(false);
 
   // 同步外部value
   useEffect(() => {
@@ -294,6 +300,26 @@ export const StockPoolSelector: React.FC<StockPoolSelectorProps> = ({
     message.success('股票池已导出');
   }, [selectedSymbols]);
 
+  const handleLoadGlobalPool = useCallback(async (pool: StockPoolOption) => {
+    setGlobalPoolLoading(true);
+    try {
+      const members = await getStockPoolMembers(pool.pool_id);
+      const symbols = members.map((s) => toSuffixCode(s)).filter(Boolean);
+      if (symbols.length === 0) {
+        message.warning('所选股票池为空');
+        return;
+      }
+      const merged = [...new Set([...selectedSymbols, ...symbols])].slice(0, maxSymbols);
+      handleChange(merged);
+      message.success(`已从全局池「${pool.name}」导入 ${symbols.length} 只股票`);
+      setGlobalPoolOpen(false);
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : '导入全局股票池失败');
+    } finally {
+      setGlobalPoolLoading(false);
+    }
+  }, [selectedSymbols, maxSymbols, handleChange]);
+
   // 根据市场过滤预设池
   const getFilteredPresets = () => {
     if (market === 'US') {
@@ -314,6 +340,16 @@ export const StockPoolSelector: React.FC<StockPoolSelectorProps> = ({
       }
       extra={
         <Space>
+          <Tooltip title="从全局股票池导入（v2 统一数据源）">
+            <Button
+              icon={<AppstoreOutlined />}
+              onClick={() => setGlobalPoolOpen(true)}
+              disabled={disabled || globalPoolLoading}
+              loading={globalPoolLoading}
+            >
+              全局池
+            </Button>
+          </Tooltip>
           <Tooltip title="导入股票">
             <Button
               icon={<ImportOutlined />}
@@ -515,6 +551,13 @@ export const StockPoolSelector: React.FC<StockPoolSelectorProps> = ({
           </div>
         </Space>
       </Modal>
+      <StockPoolPickerModal
+        open={globalPoolOpen}
+        onClose={() => setGlobalPoolOpen(false)}
+        market={market === 'CN' ? 'CN' : market === 'HK' ? 'HK' : market === 'US' ? 'US' : undefined}
+        title="从全局股票池导入"
+        onSelect={handleLoadGlobalPool}
+      />
     </Card>
   );
 };
