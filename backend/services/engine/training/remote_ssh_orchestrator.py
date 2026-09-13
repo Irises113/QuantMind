@@ -270,6 +270,26 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                         f"PYTHONPATH={self.work_dir}:{self.work_dir}/backend_min "
                         f"{qdb_key_env}{sync_python} {sync_script}"
                     )
+                    # native 直读裁剪到近 3 年（避免每次全量下载 2016 至今的历史分区）。
+                    # 默认近 3 年；TRAINING_AUTODL_QUANTDB_SINCE 可给 "YYYY-MM-DD" 或 "N-year"，
+                    # 设 "0"/"none"/"full" 则禁掉 since 走全量。
+                    sync_since = _env_or("TRAINING_AUTODL_QUANTDB_SINCE", "3-year")
+                    if sync_since and sync_since.lower() not in ("0", "none", "full", "off"):
+                        low = sync_since.lower()
+                        if low == "3-year" or low == "3-years":
+                            from datetime import date, timedelta
+
+                            sync_since = str(date.today() - timedelta(days=365 * 3))
+                        elif low.endswith("year") or low.endswith("years"):
+                            n = 0
+                            try:
+                                n = int(low.split("-")[0] or low.split(" ")[0])
+                            except ValueError:
+                                n = 3
+                            from datetime import date, timedelta
+
+                            sync_since = str(date.today() - timedelta(days=365 * n))
+                        sync_cmd += f" --since {sync_since}"
                 else:
                     sync_cmd = _env_or(
                         "TRAINING_AUTODL_QUANTDB_SYNC_CMD",
