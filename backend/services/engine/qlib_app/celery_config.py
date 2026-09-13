@@ -100,10 +100,10 @@ NEWS_MATCHER_RELOAD_SEC = int(os.getenv("NEWS_MATCHER_RELOAD_SEC", "600"))
 beat_schedule = {}
 if AUTO_INFERENCE_ENABLED:
     beat_schedule = {
-        # 交易日 00:00 触发自动推理扫描，支持多策略依次执行
+        # 交易日 08:00 触发自动推理扫描，支持多策略依次执行
         "auto-inference-window-scan-weekdays": {
             "task": "engine.tasks.auto_inference_if_needed",
-            "schedule": crontab(minute="0", hour="0", day_of_week="1-5"),
+            "schedule": crontab(minute="0", hour="8", day_of_week="1-5"),
         },
         # 推理质量回填：每日 02:30 回填已完成推理但缺 quality 记录的日期
         # （滞后 5 天等真实收益兑现，算生产 Rank IC）

@@ -153,7 +153,15 @@ QuantMind 将日常量化研究工作流整合在同一套现代化、响应灵�
   <img src="docs/images/RSS.png" alt="RSS 资讯流" width="92%">
 </p>
 
-### 4. AI-IDE 策略开发工作区
+### 4. 个股终端 (Stock Terminal)
+
+整合个股 K 线（日/周/月线与复权切换）、均线与成交量、模型推理分数曲线，并聚合概况、财务、估值、筹码、融资、形态、股东、资讯、L2 等全方位数据。
+
+<p align="center">
+  <img src="docs/images/StockTerminal.png" alt="个股终端" width="92%">
+</p>
+
+### 5. AI-IDE 策略开发工作区
 
 内置代码编辑器与量化 AI Copilot 助手，支持策略编写、语法检查、一键回测与云端发布。
 
@@ -161,7 +169,7 @@ QuantMind 将日常量化研究工作流整合在同一套现代化、响应灵�
   <img src="docs/images/AI-IDE.png" alt="AI-IDE 策略工作区" width="92%">
 </p>
 
-### 5. 微软 Qlib 回测中心 (Backtest Center)
+### 6. 微软 Qlib 回测中心 (Backtest Center)
 
 基于微软 Qlib 引擎的高性能事件驱动回测，全面评估策略收益与最大回撤风险。
 
@@ -169,7 +177,7 @@ QuantMind 将日常量化研究工作流整合在同一套现代化、响应灵�
   <img src="docs/images/QuickBacktest.png" alt="Qlib 回测中心" width="92%">
 </p>
 
-### 6. AI 模型训练工场 (Model Training)
+### 7. AI 模型训练工场 (Model Training)
 
 可视化配置训练参数，支持 13 种 ML/DL 算法，内置 Optuna 自动调参、WFA 滚动切分与本地/AutoDL 算力调度。
 
@@ -177,7 +185,7 @@ QuantMind 将日常量化研究工作流整合在同一套现代化、响应灵�
   <img src="docs/images/ModelTraining.png" alt="模型训练工场" width="92%">
 </p>
 
-### 7. 批量推理与选股信号中心 (Inference Hub)
+### 8. 批量推理与选股信号中心 (Inference Hub)
 
 支持全市场批量截面排序、Top N 标的推荐、信号动态融合与历史回溯。
 
@@ -185,7 +193,7 @@ QuantMind 将日常量化研究工作流整合在同一套现代化、响应灵�
   <img src="docs/images/ModelInference.png" alt="批量推理与选股" width="92%">
 </p>
 
-### 8. QuantaAlpha 智能因子挖掘平台
+### 9. QuantaAlpha 智能因子挖掘平台
 
 基于 LLM 驱动自主量化因子演化平台（AutoAlpha 2.0），用自然语言描述量化假设，AI 自动生成表达式与进化回测。
 

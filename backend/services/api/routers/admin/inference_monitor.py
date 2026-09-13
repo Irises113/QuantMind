@@ -15,7 +15,7 @@ from backend.services.live_trading.services.admin_inference_view import (
     auto_inference_enabled,
     isoformat_date,
     isoformat_dt,
-    next_weekday_midnight,
+    next_weekday_auto_inference,
     reason_label,
 )
 from backend.shared.database_manager_v2 import get_session
@@ -83,9 +83,9 @@ async def get_inference_monitor(
 
     schedule = {
         "enabled": auto_inference_enabled(),
-        "cron": "工作日 00:00",
+        "cron": "工作日 08:00",
         "timezone": "Asia/Shanghai",
-        "next_run_at": isoformat_dt(next_weekday_midnight()),
+        "next_run_at": isoformat_dt(next_weekday_auto_inference()),
         "task": "engine.tasks.auto_inference_if_needed",
     }
 

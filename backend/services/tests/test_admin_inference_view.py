@@ -2,24 +2,31 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from backend.services.live_trading.services.admin_inference_view import (
-    next_weekday_midnight,
+    next_weekday_auto_inference,
     reason_label,
 )
 
 _SH = ZoneInfo("Asia/Shanghai")
 
 
-def test_next_weekday_midnight_skips_weekend():
+def test_next_weekday_auto_inference_skips_weekend():
     friday_afternoon = datetime(2026, 9, 11, 15, 0, tzinfo=_SH)
-    nxt = next_weekday_midnight(friday_afternoon)
+    nxt = next_weekday_auto_inference(friday_afternoon)
     assert nxt.weekday() == 0
     assert nxt.date().isoformat() == "2026-09-14"
-    assert nxt.hour == 0
+    assert nxt.hour == 8
 
 
-def test_next_weekday_midnight_same_day_before_midnight():
-    monday_early = datetime(2026, 9, 14, 0, 0, tzinfo=_SH)
-    nxt = next_weekday_midnight(monday_early)
+def test_next_weekday_auto_inference_same_day_before_run_time():
+    monday_early = datetime(2026, 9, 14, 7, 0, tzinfo=_SH)
+    nxt = next_weekday_auto_inference(monday_early)
+    assert nxt.date().isoformat() == "2026-09-14"
+    assert nxt.hour == 8
+
+
+def test_next_weekday_auto_inference_after_run_time():
+    monday_after = datetime(2026, 9, 14, 9, 0, tzinfo=_SH)
+    nxt = next_weekday_auto_inference(monday_after)
     assert nxt.date().isoformat() == "2026-09-15"
 
 
