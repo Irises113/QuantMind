@@ -18,11 +18,11 @@ P.append(("quantbot-init", "QuantBot 环境初始化", "平台运营",
 
 # ---- 平台运营 ----
 P.append(("quantmind-operations", "平台运营总指南", "平台运营",
-    "模型训练、模型管理、后台数据更新、RSS 新闻对接等平台运营操作",
+    "模型训练（5 步流程、特征字典、AutoDL 节点）、模型管理、数据同步、RSS 新闻",
     "视具体操作而定",
-    """我需要执行平台运营操作：{操作内容，如：训练一个 lightgbm 模型 / 更新今日数据 / 对接 RSS 新闻源}。
+    """我需要执行平台运营操作：{操作内容，如：训练 lightgbm / 查特征字典 / 更新今日数据 / 对接 RSS}。
 
-请读取 skills/quantmind-operations/SKILL.md，按其中对应章节的流程执行，遵守顶部运行环境契约。涉及数据更新的操作请确认同步脚本执行结果；完成后给我操作结果速览。"""))
+请读取 skills/quantmind-operations/SKILL.md，按对应章节执行（训练走 5 步：特征选择→训练目标→参数→执行→入库；特征类别以 /api/v1/models/feature-catalog 动态返回为准，勿硬编码）。遵守顶部运行环境契约；涉及数据同步请确认脚本执行结果；完成后给我操作结果速览。"""))
 
 P.append(("quantmind-deploy", "部署与运维", "平台运营",
     "一键部署、快速部署、数据库初始化、部署问题排查、服务健康检查",
@@ -44,6 +44,13 @@ P.append(("quantdb-fields", "字段单位与口径速查", "平台运营",
     """我在做数据分析/回测/报告时需要确认数据口径：{字段疑问，如：成交量单位是股还是手 / 股息率是百分数还是小数 / L2 逐笔数据怎么读}。
 
 请读取 skills/quantdb-fields/SKILL.md，直接给我该字段的单位、口径和已知陷阱，必要时给出验证方法。"""))
+
+P.append(("quantdb-data-structure", "QuantDB 数据结构", "平台运营",
+    "数据目录组织、Hive 分区、parquet 路径、代码格式、quantdb_hub 读取入口、quantdb vs quantcustom",
+    "结构说明 / 查询路径",
+    """我需要了解 QuantDB 本地数据结构或排查查不到数据：{问题，如：l1_factors 在哪 / dt 分区怎么写 / 600519.SH 还是 SH600519 / 因子挖掘产物落哪}。
+
+请读取 skills/quantdb-data-structure/SKILL.md（数据在哪、怎么组织、怎么读）；字段单位另查 skills/quantdb-fields/SKILL.md。说明 quantdb（官方只读）与 quantcustom（用户/挖掘产出）边界，给出可直接用的路径或 DuckDB 视图名。"""))
 
 # ---- 研究分析 ----
 P.append(("daily-review", "A股每日复盘", "研究分析",
@@ -89,11 +96,11 @@ P.append(("trading-agents", "个股投研分析（智能体自主版）", "研�
 请读取 skills/trading-agents/SKILL.md 并按其流程执行：拉取本地数据（特征/风险评分/推理分数/新闻）→ 组织多空子代理辩论 → 综合研判 → 生成 MD 报告 → 转 PDF 落盘 data/reports/trading_agents/{市场}/{股票名}/。最后给我投资论点摘要和主要风险。"""))
 
 P.append(("smart-strategy-stock-picking", "条件选股", "研究分析",
-    "基于 QuantDB 的条件选股：自然语言或结构化条件筛选、构建股票池",
+    "QuantDB 条件选股：自然语言/结构化/DSL 三种方式，可选登记为全局股票池",
     "股票池列表",
     """请帮我选股，条件：{自然语言条件，如：市值 100-500 亿、PE < 30、近 20 日主力资金净流入、行业为半导体}。
 
-请读取 skills/smart-strategy-stock-picking/SKILL.md，把我的条件转成结构化筛选并执行。结果按市值/涨跌幅排序给表格，注明每列单位与数据截止日期；超出 50 只时只展示前 50 并说明总量。"""))
+请读取 skills/smart-strategy-stock-picking/SKILL.md：优先 parse-text 或 query-pool 执行 DSL 筛选。结果按市值/涨跌幅排序给表格，注明单位与数据截止日期；超出 50 只只展示前 50。若用户要求持久化股票池，提示在管理后台「全局股票池」保存，或通过 legacy 保存桥接到 v2（pool:code）供回测/训练/推理使用。"""))
 
 P.append(("batch-inference-analysis", "批量推理信号分析", "研究分析",
     "每日推理信号解读：行业轮动、个股分数区间、负分参考、市场状态判断",
@@ -125,18 +132,18 @@ P.append(("ai-ide-strategy-writing", "AI 写量化策略", "策略·因子·模�
 请读取 skills/ai-ide-strategy-writing/SKILL.md，按其规范生成 Qlib 策略代码，在 Docker runner 中执行验证可运行，然后落库保存。给我策略逻辑说明、代码位置和执行结果。"""))
 
 P.append(("backtest-center", "回测中心", "策略·因子·模型·回测",
-    "Qlib 回测：快速回测、专家模式、策略对比、参数优化、高级分析",
+    "Qlib 回测：快速/专家模式、向量化极速回测、策略对比、参数优化、全局股票池 pool_id",
     "回测结果报告",
-    """我需要回测：{快速回测某策略 / 对比多个策略 / 参数优化 / 查看回测历史}，市场 {CN/HK/US/CRYPTO/FUTURES}。
+    """我需要回测：{快速回测 / 专家模式 / 对比策略 / 参数优化 / 查历史}，市场 {CN/HK/US/CRYPTO/FUTURES}，股票池 {csi300 / pool:自定义池code / 留空全市场}。
 
-请读取 skills/backtest-center/SKILL.md，按对应模式操作。回测配置按市场切换（provider_uri/基准/股票池）。结果给我年化收益、最大回撤、夏普比率的对比表，并说明结论是否稳健。"""))
+请读取 skills/backtest-center/SKILL.md 按对应模式操作。选股范围优先用 pool_id（如 pool:csi1000），与前端全局股票池一致；纯 TopK 策略可试 use_vectorized=true 极速引擎（不安全策略会自动退回 step 模式）。按市场切换 provider_uri/基准。结果给我年化收益、最大回撤、夏普比率，并说明结论是否稳健。"""))
 
 P.append(("rd-agent-factor-mining", "因子挖掘（RD-Agent）", "策略·因子·模型·回测",
-    "RD-Agent 因子演化端到端流水线：启动 → 轮询 → 回测评估 → IC/Sharpe 排序 → 入库",
-    "因子报告 + 入库结果",
-    """请帮我挖掘新因子：市场 {CN/HK/US/CRYPTO/FUTURES}，{可选：关注方向，如量价类/基本面类}。
+    "factor_pipeline 一键管线：preflight → 演化 → 回测 → IC 排序 → explain → export 至 quantcustom",
+    "因子报告 + quantcustom 入库",
+    """请帮我挖掘新因子：方向「{挖掘假设，如：筹码集中度上行伴随低位换手放大}」，股票池 {csi300 / 自定义全局池 code}，市场 {a_share 等}。
 
-请读取 skills/rd-agent-factor-mining/SKILL.md 并走完整流水线：preflight 环境检查 → 启动演化 → 轮询完成 → 批量回测评估 → IC/Sharpe 排序 → 解释 → 入库 → Markdown 报告。挖因子耗时较长，先给我预计时间并分段汇报进度。"""))
+请读取 skills/rd-agent-factor-mining/SKILL.md：先跑 scripts/alpha_agent/factor_pipeline.py --check-env；再用 --direction / --universe / --loops 走一键管线（演化→回测→排名→可选 --explain-top / --export）。universe 支持内置指数与全局自定义池 code。产物落 /data/quantcustom（勿写 quantdb）。耗时长，分段汇报；最后给 Top 因子 IC/Sharpe 与是否 export 成功。"""))
 
 P.append(("model-train-infer-backtest-report", "训练-推理-回测-报告全流程", "策略·因子·模型·回测",
     "T+N 周期模型训练（13 种模型）→ 批量推理 → 组合回测（阈值+大盘MA+止损）→ 研报输出",
@@ -166,37 +173,6 @@ P.append(("ibkr-cli", "IBKR 盈透证券操作", "交易",
     """我需要通过 Interactive Brokers 操作：{行情查询 / 下单 / 账户持仓盈亏 / 期权链 / 基本面数据}。
 
 请读取 skills/ibkr-cli/SKILL.md 获取 ibkr-cli 用法并执行。涉及真实订单的操作先与我确认要素；输出用表格，注明币种与数据时点。"""))
-
-# ---- 券商 SDK ----
-P.append(("futuapi", "富途 OpenAPI 助手", "券商 SDK",
-    "富途 OpenAPI（Python）：行情/K线/下单/持仓/资金",
-    "代码 / 查询结果",
-    """我需要用富途 OpenAPI：{行情查询 / 下单 / 持仓资金查询 / 编写交易程序}。
-
-请读取 skills/futuapi/SKILL.md 获取 SDK 配置与 API 用法（OpenD 连接方式见 install-futu-opend 技能），给出可直接运行的 Python 代码或执行结果。真实下单代码先给我确认。"""))
-
-P.append(("install-futu-opend", "安装富途 OpenD", "券商 SDK",
-    "富途 OpenD 网关下载/安装/启动、futu-api SDK 升级",
-    "安装结果",
-    """请帮我安装/启动富途 OpenD 网关：{本机安装 / 服务器安装 / 升级 futu-api SDK}。
-
-请读取 skills/install-futu-opend/SKILL.md 并按流程执行，完成后验证 OpenD 连接（端口 11111）可用。"""))
-
-TIGER_LANGS = {
-    "tigeropen": ("Python", "行情、股票/期货/期权交易、实时推送、CLI、MCP Server 集成"),
-    "tigeropen-java": ("Java", "行情、交易、推送、账户管理、策略示例"),
-    "tigeropen-cpp": ("C++", "SDK 编译配置、行情、交易、推送"),
-    "tigeropen-csharp": ("C#/.NET", "行情、交易、推送"),
-    "tigeropen-go": ("Go", "行情、交易、推送"),
-    "tigeropen-rust": ("Rust（异步）", "行情、交易、推送"),
-    "tigeropen-typescript": ("TypeScript/Node.js", "行情、交易、推送"),
-}
-for name, (lang, feats) in TIGER_LANGS.items():
-    P.append((name, "老虎证券 OpenAPI " + lang + " SDK", "券商 SDK",
-        "老虎证券 OpenAPI " + lang + " SDK：" + feats,
-        "可运行代码",
-        "我需要用老虎证券 OpenAPI（" + lang + "）实现：{需求，如：订阅某股实时行情 / 下单 / 查询期权链 / 集成到我的应用}。\n\n"
-        "请读取 skills/" + name + "/SKILL.md 获取 SDK 安装配置与 API 用法，生成可直接运行的代码，标注所需的开发者账号配置项（不硬编码密钥）。"))
 
 
 def write(name, title, category, desc, outputs, body):

@@ -1,13 +1,13 @@
 ---
 name: quantdb-data-structure
-title: 数据结构与读取口径
+title: QuantDB 数据结构
 category: 平台运营
-description: QuantDB 服务器数据目录组织、Hive 分区规律、代码格式口径与读取入口速查
-outputs: 结构与口径说明
+description: 数据目录组织、Hive 分区、parquet 路径、代码格式、quantdb_hub 读取入口、quantdb vs quantcustom
+outputs: 结构说明 / 查询路径
 ---
 
 > 复制下方提示词到 QuantBot（QwenPaw 控制台）即可使用；`{占位符}` 处替换为你的实际内容。
 
-我需要读写/探查 QuantDB 本地数据：{具体场景，如：查某日某股日K / 写 DuckDB 因子查询 / 排查某数据集查不到数据 / 确认数据在服务器哪个目录}。
+我需要了解 QuantDB 本地数据结构或排查查不到数据：{问题，如：l1_factors 在哪 / dt 分区怎么写 / 600519.SH 还是 SH600519 / 因子挖掘产物落哪}。
 
-请读取 skills/quantdb-data-structure/SKILL.md，先给我该数据集的目录位置、分区/文件组织方式和代码格式口径（后缀式/前缀式），再给出推荐读取方式与避坑点。
+请读取 skills/quantdb-data-structure/SKILL.md（数据在哪、怎么组织、怎么读）；字段单位另查 skills/quantdb-fields/SKILL.md。说明 quantdb（官方只读）与 quantcustom（用户/挖掘产出）边界，给出可直接用的路径或 DuckDB 视图名。

@@ -39,6 +39,7 @@ outputs: <产出物与落盘目录>
 | [quantmind-deploy](quantmind-deploy.md) | 部署、问题排查、服务健康检查 |
 | [quantdb-sdk](quantdb-sdk.md) | QuantDB 数据集与 K线/财务/因子查询 |
 | [quantdb-fields](quantdb-fields.md) | 字段单位与口径速查 |
+| [quantdb-data-structure](quantdb-data-structure.md) | QuantDB 目录结构、分区、parquet 路径、quantdb vs quantcustom |
 | [news-sentiment-finbert](news-sentiment-finbert.md) | FinBERT 情绪管线安装与运维 |
 
 ### 研究分析
@@ -72,16 +73,4 @@ outputs: <产出物与落盘目录>
 | [tdx-live-trading](tdx-live-trading.md) | TDX 实盘监控与交易 |
 | [ibkr-cli](ibkr-cli.md) | IBKR 盈透证券操作 |
 
-### 券商 SDK
-
-| 提示词 | 用途 |
-|--------|------|
-| [futuapi](futuapi.md) | 富途 OpenAPI（Python） |
-| [install-futu-opend](install-futu-opend.md) | 安装富途 OpenD 网关 |
-| [tigeropen](tigeropen.md) | 老虎证券 OpenAPI Python SDK |
-| [tigeropen-java](tigeropen-java.md) | 老虎证券 OpenAPI Java SDK |
-| [tigeropen-cpp](tigeropen-cpp.md) | 老虎证券 OpenAPI C++ SDK |
-| [tigeropen-csharp](tigeropen-csharp.md) | 老虎证券 OpenAPI C#/.NET SDK |
-| [tigeropen-go](tigeropen-go.md) | 老虎证券 OpenAPI Go SDK |
-| [tigeropen-rust](tigeropen-rust.md) | 老虎证券 OpenAPI Rust SDK |
-| [tigeropen-typescript](tigeropen-typescript.md) | 老虎证券 OpenAPI TypeScript SDK |
+> 富途 / 老虎等券商 OpenAPI 技能仍保留在 `skills/` 供 QuantBot 按需读取，**不在技能中心展示**。
