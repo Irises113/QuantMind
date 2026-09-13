@@ -320,13 +320,9 @@ def main():
             logger.info("  Factor %d: %s (expr: %s)", i, f["name"],
                          f.get("formulation", "")[:80] or "N/A")
 
-        # Persist
-        count = asyncio.run(persist_factors(factors, args.task_id, args.user_id, args.market, args.universe))
-        logger.info("Persisted %d factors to database", count)
-
-        # Compute IC metrics for persisted factors
-        # 数据路径优先本次任务实际生成的 daily_pv.h5（A股由 _ensure_data_file 生成），
-        # 其次各市场预生成文件，最后回退 seed 模板。
+        # Persist 因子 + 回填 IC —— 必须在同一事件循环内完成，
+        # 否则跨 asyncio.run 复用 DB engine 会报 "attached to a different loop"。
+        # 数据路径优先本次任务实际生成的 daily_pv.h5（A股由 _ensure_data_file 生成）。
         market_data_paths = {
             "crypto": "/app/db/crypto_data/5min_pv.h5",
             "hong_kong": "/app/db/hk_data/daily_pv.h5",
@@ -342,42 +338,81 @@ def main():
                 "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5",
             )
         logger.info("IC data path resolved: %s (exists=%s)", data_path, Path(data_path).exists())
-        if Path(data_path).exists():
-            logger.info("Computing IC metrics for %d factors...", len(factors))
-            from backend.services.engine.qlib_app.services.rd_agent_persistence import RDAgentFactorPersistence
-            persistence = RDAgentFactorPersistence()
 
-            async def update_metrics():
-                for f in factors:
-                    code = f.get("code", "")
-                    if not code:
-                        continue
-                    try:
-                        import hashlib
-                        raw_id = f"{args.task_id}:{f['name']}"
-                        factor_id = hashlib.md5(raw_id.encode()).hexdigest()
+        import hashlib
 
-                        metrics = compute_factor_ic(code, data_path)
+        from backend.services.engine.qlib_app.services.rd_agent_persistence import (
+            RDAgentFactorPersistence,
+        )
+
+        async def _persist_and_metrics() -> int:
+            p = RDAgentFactorPersistence()
+            await p.ensure_tables()
+            saved = 0
+            for f in factors:
+                try:
+                    fid = hashlib.md5(f"{args.task_id}:{f['name']}".encode()).hexdigest()
+                    metadata: dict = {
+                        "source": "rd_agent",
+                        "market": args.market,
+                        "task_id": args.task_id,
+                        "category": f.get("category", args.market),
+                    }
+                    if f.get("formulation"):
+                        metadata["formulation"] = f["formulation"]
+                    if f.get("description"):
+                        metadata["description"] = f["description"]
+                    if f.get("feedback"):
+                        metadata["feedback"] = f["feedback"][:2000]
+
+                    status = "pending"
+                    ic_value = None
+                    rank_ic = None
+                    if Path(data_path).exists() and f.get("code"):
+                        metrics = await asyncio.to_thread(
+                            compute_factor_ic, f["code"], data_path
+                        )
                         if metrics:
-                            ic = metrics.get("ic", 0)
-                            await persistence.update_factor_metrics(
-                                factor_id=factor_id,
-                                ic_value=ic,
-                                status="completed",
-                                metadata={
-                                    "rank_ic": metrics.get("rank_ic", 0),
-                                    "icir": metrics.get("icir", 0),
-                                    "rank_icir": metrics.get("rank_icir", 0),
-                                },
+                            status = "completed"
+                            ic_value = metrics.get("ic")
+                            rank_ic = metrics.get("rank_ic")
+                            metadata.update({
+                                "icir": metrics.get("icir", 0),
+                                "rank_icir": metrics.get("rank_icir", 0),
+                                "data_source": "task_h5",
+                            })
+                            logger.info(
+                                "  %s: IC=%.4f, RankIC=%.4f, ICIR=%.4f",
+                                f["name"], ic_value or 0, rank_ic or 0,
+                                metrics.get("icir", 0),
                             )
-                            logger.info("  %s: IC=%.4f, RankIC=%.4f, ICIR=%.4f",
-                                        f["name"], ic, metrics.get("rank_ic", 0), metrics.get("icir", 0))
                         else:
-                            logger.info("  %s: IC computation skipped (no code or data)", f["name"])
-                    except Exception as e:
-                        logger.warning("  %s: IC computation failed: %s", f["name"], e)
+                            logger.info("  %s: IC computation empty", f["name"])
 
-            asyncio.run(update_metrics())
+                    await p.save_factor(
+                        factor_id=fid,
+                        factor_name=f["name"],
+                        factor_code=f.get("code", ""),
+                        user_id=args.user_id,
+                        metadata=metadata,
+                        market=args.market,
+                        universe=args.universe,
+                        factor_formulation=f.get("formulation", ""),
+                    )
+                    await p.update_factor_metrics(
+                        factor_id=fid,
+                        status=status,
+                        ic_value=ic_value,
+                        rank_ic=rank_ic,
+                        metadata=metadata,
+                    )
+                    saved += 1
+                except Exception as e:
+                    logger.warning("Failed to persist factor %s: %s", f["name"], e)
+            return saved
+
+        count = asyncio.run(_persist_and_metrics())
+        logger.info("Persisted %d factors to database", count)
 
         # Write result JSON for launcher to read
         result_file = Path(log_dir) / "result.json"
