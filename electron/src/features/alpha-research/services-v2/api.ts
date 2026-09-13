@@ -59,7 +59,7 @@ function emptyMetrics(): RealtimeMetrics {
   };
 }
 
-function classifyQuality(ic: number | null | undefined): 'high' | 'medium' | 'low' {
+export function classifyQuality(ic: number | null | undefined): 'high' | 'medium' | 'low' {
   if (ic == null) return 'low';
   const v = Math.abs(ic);
   if (v >= 0.05) return 'high';

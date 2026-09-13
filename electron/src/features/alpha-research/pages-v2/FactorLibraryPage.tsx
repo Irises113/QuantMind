@@ -4,7 +4,7 @@ import { Button } from '../components-v2/ui/Button';
 import { Badge } from '../components-v2/ui/Badge';
 import { Factor, FactorQuality, UniverseInfo } from '../types-v2';
 import { formatNumber, getQualityBadgeClass } from '../utils-v2';
-import { getFactors, getFactorDetail, getUniverses, getFactoryFactors, UNIVERSE_LABELS } from '../services-v2/api';
+import { getFactors, getFactorDetail, getUniverses, getFactoryFactors, classifyQuality, UNIVERSE_LABELS } from '../services-v2/api';
 import { alphaAgentService, MarketInfo } from '../services/alphaAgentService';
 import {
   Database,
@@ -113,7 +113,7 @@ export const FactorLibraryPage: React.FC<{ onNavigate?: (page: string) => void }
           factorName: f.factorName,
           factorExpression: f.factorExpression,
           factorDescription: `因子工厂产出 · 字段 ${f.field || '—'} · 覆盖率 ${(f.coverage * 100).toFixed(0)}%`,
-          quality: (Math.abs(f.ic) >= 0.05 ? 'high' : Math.abs(f.ic) >= 0.03 ? 'medium' : 'low') as FactorQuality,
+          quality: classifyQuality(f.ic),
           market: 'a_share',
           universe: 'all_a',
           ic: f.ic,
@@ -124,7 +124,7 @@ export const FactorLibraryPage: React.FC<{ onNavigate?: (page: string) => void }
           annualReturn: 0,
           maxDrawdown: 0,
           round: 0,
-          direction: '工厂',
+          direction: f.ic >= 0 ? '正向' : '反向',
           createdAt: generatedAt,
           readOnly: true,
           source: 'factor_factory',
@@ -575,6 +575,9 @@ export const FactorLibraryPage: React.FC<{ onNavigate?: (page: string) => void }
                       </span>
                     )}
                   </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    质量按 |IC| 分级（≥0.05 高 / ≥0.02 中）；IC 为负表示因子与收益负相关，可反向使用。
+                  </p>
                 </div>
                 <Button variant="ghost" onClick={() => setSelectedFactor(null)}>
                   <X className="w-4 h-4" />
