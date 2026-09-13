@@ -340,36 +340,49 @@ def generate_field_factors(
     return out
 
 
+def _binary_pairs(anchors: list[str], base: dict[str, pd.DataFrame]) -> list[tuple[str, str]]:
+    avail = [a for a in anchors if a in base]
+    return [(a, b) for i, a in enumerate(avail) for b in avail[i + 1:]]
+
+
 def generate_binary_factors(
     base: dict[str, pd.DataFrame],
     anchors: list[str],
     *,
     windows: list[int],
     ops: tuple[str, ...] = ("csdiff", "csratio", "tscorr"),
+    only: set[str] | None = None,
+    pairs: list[tuple[str, str]] | None = None,
 ) -> dict[str, tuple[pd.DataFrame, str]]:
-    """锚字段两两组合：截面差/比值/滚动相关。"""
-    avail = [a for a in anchors if a in base]
+    """锚字段两两组合：截面差/比值/滚动相关。only 给定时只算其中因子。"""
+    if pairs is None:
+        pairs = _binary_pairs(anchors, base)
     out: dict[str, tuple[pd.DataFrame, str]] = {}
-    for i, a in enumerate(avail):
-        for b in avail[i + 1:]:
-            xa, xb = base[a], base[b]
-            if "csdiff" in ops:
-                out[_feature_name("bincsdiff", f"{a}_{b}")] = (
+    for a, b in pairs:
+        xa, xb = base[a], base[b]
+        if "csdiff" in ops:
+            name = _feature_name("bincsdiff", f"{a}_{b}")
+            if only is None or name in only:
+                out[name] = (
                     (alf.R(xa) - alf.R(xb)).astype(np.float32),
                     f"(RANK(${a}) - RANK(${b}))",
                 )
-            if "csratio" in ops:
-                out[_feature_name("bincsratio", f"{a}_{b}")] = (
+        if "csratio" in ops:
+            name = _feature_name("bincsratio", f"{a}_{b}")
+            if only is None or name in only:
+                out[name] = (
                     (alf.R(xa) / (alf.R(xb) + EPS)).astype(np.float32),
                     f"(RANK(${a}) / (RANK(${b}) + 1e-12))",
                 )
-            if "tscorr" in ops:
-                for w in windows:
-                    out[_feature_name("bintscorr", f"{a}_{b}", w)] = (
-                        alf.CORR(xa, xb, w).astype(np.float32),
-                        f"CORR(${a}, ${b}, {w})",
-                    )
-    log.info("binary combos: %d anchors → %d candidates", len(avail), len(out))
+        if "tscorr" in ops:
+            for w in windows:
+                name = _feature_name("bintscorr", f"{a}_{b}", w)
+                if only is not None and name not in only:
+                    continue
+                out[name] = (
+                    alf.CORR(xa, xb, w).astype(np.float32),
+                    f"CORR(${a}, ${b}, {w})",
+                )
     return out
 
 
@@ -582,12 +595,18 @@ def _slice(df: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timestamp | Non
 _P1: dict = {}
 
 
-def _field_worker(job: str | None) -> list[dict]:
-    """单字段（job=None 表示二元组合）生成 + 筛选，返回指标行。"""
+def _field_worker(job) -> list[dict]:
+    """单字段 / 二元组合分片生成 + 筛选，返回指标行。
+
+    job 为字段名(str)，或 ("bin", start, end) 表示二元对分片。
+    """
     start, end = _P1["start"], _P1["end"]
-    if job is None:
+    if isinstance(job, tuple):
+        _, s, e = job
         facs = generate_binary_factors(
-            _P1["base"], _P1["anchors"], windows=_P1["windows"], ops=_P1["binary_ops"]
+            _P1["base"], _P1["anchors"],
+            windows=_P1["windows"], ops=_P1["binary_ops"],
+            pairs=_P1["bin_pairs"][s:e],
         )
         field = "binary"
     else:
@@ -654,15 +673,21 @@ def run(args: argparse.Namespace) -> None:
     fwd_rank = _rank_rows(fwd_win)  # 前瞻收益秩只算一次，全因子复用
 
     # 2) pass1：逐字段（可选多进程）生成 + 只保留指标（内存 O(字段)）
+    n_jobs = args.jobs or min(8, os.cpu_count() or 4)
+    bin_pairs = _binary_pairs(BINARY_ANCHORS, base) if binary_ops else []
     _P1.update(
         base=base, start=start_ts, end=end_ts, fwd_rank=fwd_rank,
         windows=windows, ops=ops, cs_ops=cs_ops, binary_ops=binary_ops,
-        anchors=BINARY_ANCHORS, min_cov=args.min_coverage,
+        anchors=BINARY_ANCHORS, min_cov=args.min_coverage, bin_pairs=bin_pairs,
     )
-    jobs: list[str | None] = list(fields)
-    if binary_ops:
-        jobs.append(None)
-    n_jobs = args.jobs or min(8, os.cpu_count() or 4)
+    jobs: list = list(fields)
+    if bin_pairs:
+        step = max(1, (len(bin_pairs) + n_jobs - 1) // n_jobs)
+        jobs += [
+            ("bin", i, min(i + step, len(bin_pairs)))
+            for i in range(0, len(bin_pairs), step)
+        ]
+        log.info("binary pairs: %d → %d chunk jobs", len(bin_pairs), len(jobs) - len(fields))
     rows: list[dict] = []
     if n_jobs > 1 and len(jobs) > 1:
         import multiprocessing as mp
@@ -707,7 +732,7 @@ def run(args: argparse.Namespace) -> None:
     for field, names in pool_by_field.items():
         if field == "binary":
             facs = generate_binary_factors(
-                base, BINARY_ANCHORS, windows=windows, ops=binary_ops
+                base, BINARY_ANCHORS, windows=windows, ops=binary_ops, only=names
             )
         else:
             facs = generate_field_factors(
