@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -354,6 +355,75 @@ async def get_factor(factor_id: str, request: Request):
     """获取单个因子详情"""
     factor = await _require_owned_factor(factor_id, request)
     return {"code": 200, "data": factor}
+
+
+def _resolve_factory_manifest() -> Path:
+    """因子工厂 MANIFEST.csv 路径（quantcustom 用户自定义数据集）。"""
+    root = os.getenv("QM_QUANTCUSTOM_DATA_DIR") or "/data/quantcustom"
+    return Path(root) / "6_ml_datasets" / "l1_factors" / "MANIFEST.csv"
+
+
+def _to_float(value: object) -> float | None:
+    try:
+        f = float(value)  # type: ignore[arg-type]
+        return f if f == f else None  # 过滤 NaN
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get("/factory-factors")
+async def list_factory_factors(request: Request):
+    """列出因子工厂产出的表达式因子（只读，来自 quantcustom MANIFEST.csv）。
+
+    工厂因子是共享的批量产出（不属某个用户），只展示、不提供回测/训练操作。
+    """
+    import csv
+
+    get_authenticated_identity(request)  # 复用统一鉴权（与 /factors 一致）
+
+    manifest = _resolve_factory_manifest()
+    if not manifest.is_file():
+        return {"code": 200, "data": {"factors": [], "total": 0, "generated_at": None}}
+
+    factors: list[dict] = []
+    with manifest.open(encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            name = (row.get("factor_name") or "").strip()
+            if not name:
+                continue
+            expr = (row.get("expression") or "").strip()
+            factors.append({
+                "factor_id": f"factory:{name}",
+                "factor_name": name,
+                "factor_expression": expr,
+                "factor_formulation": expr,
+                "factor_code": "",
+                "ic_value": _to_float(row.get("ic")),
+                "icir": _to_float(row.get("icir")),
+                "coverage": _to_float(row.get("coverage")),
+                "rank_ic": None,
+                "status": "completed",
+                "market": "a_share",
+                "universe": "all_a",
+                "source": "factor_factory",
+                "read_only": True,
+                "metadata": {
+                    "source": "factor_factory",
+                    "read_only": True,
+                    "field": row.get("field") or "",
+                    "icir": _to_float(row.get("icir")),
+                    "coverage": _to_float(row.get("coverage")),
+                },
+            })
+    factors.sort(key=lambda x: abs(x.get("ic_value") or 0.0), reverse=True)
+    return {
+        "code": 200,
+        "data": {
+            "factors": factors,
+            "total": len(factors),
+            "generated_at": datetime.fromtimestamp(manifest.stat().st_mtime).isoformat(),
+        },
+    }
 
 
 @router.post("/factors/{factor_id}/explain")

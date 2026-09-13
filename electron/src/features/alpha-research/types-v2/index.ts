@@ -201,6 +201,11 @@ export interface Factor {
   round: number;
   direction: string;
   createdAt: string;
+
+  /** 因子工厂批量产出：只读展示，不提供回测/训练操作 */
+  readOnly?: boolean;
+  source?: string;
+  coverage?: number;
 }
 
 // Backtest result

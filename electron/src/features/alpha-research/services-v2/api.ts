@@ -317,6 +317,34 @@ export async function getFactorDetail(
   return makeOk({ factor: { ...normalizeAgentFactor(raw), raw } });
 }
 
+/** 因子工厂产出的表达式因子（只读、共享，非某用户挖掘结果） */
+export interface FactoryFactor {
+  factorId: string;
+  factorName: string;
+  factorExpression: string;
+  ic: number;
+  icir: number;
+  coverage: number;
+  field: string;
+}
+
+export async function getFactoryFactors(): Promise<
+  ApiResponse<{ factors: FactoryFactor[]; generatedAt: string | null }>
+> {
+  const res = await apiClient.get(`/alpha-agent/factory-factors`);
+  const data = res.data?.data ?? {};
+  const factors: FactoryFactor[] = (data.factors ?? []).map((raw: any) => ({
+    factorId: raw.factor_id ?? '',
+    factorName: raw.factor_name ?? 'unnamed',
+    factorExpression: raw.factor_expression ?? raw.factor_formulation ?? '',
+    ic: raw.ic_value ?? 0,
+    icir: raw.metadata?.icir ?? raw.icir ?? 0,
+    coverage: raw.metadata?.coverage ?? raw.coverage ?? 0,
+    field: raw.metadata?.field ?? '',
+  }));
+  return makeOk({ factors, generatedAt: data.generated_at ?? null });
+}
+
 export async function explainFactor(
   factorId: string,
 ): Promise<ApiResponse<{ explanation: string; cached: boolean }>> {
