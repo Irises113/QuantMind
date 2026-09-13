@@ -1007,6 +1007,34 @@ CREATE TABLE IF NOT EXISTS risk_rules (
 );
 
 -- ========================
+-- 38b. RISK_EVENTS
+-- ========================
+CREATE TABLE IF NOT EXISTS risk_events (
+    id              SERIAL PRIMARY KEY,
+    rule_id         INTEGER,
+    rule_type       VARCHAR(50) NOT NULL,
+    tenant_id       VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id         INTEGER NOT NULL,
+    trade_date      DATE NOT NULL,
+    symbol          VARCHAR(32) NOT NULL DEFAULT '*',
+    action          VARCHAR(32) NOT NULL,
+    status          VARCHAR(32) NOT NULL,
+    trigger_price   DOUBLE PRECISION,
+    cost_price      DOUBLE PRECISION,
+    pnl_pct         DOUBLE PRECISION,
+    quantity        DOUBLE PRECISION,
+    order_ids       JSONB,
+    message         VARCHAR(500),
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_risk_events_user_date
+    ON risk_events (tenant_id, user_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_risk_events_rule_date
+    ON risk_events (rule_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_risk_events_status
+    ON risk_events (status);
+
+-- ========================
 -- 39. REAL_ACCOUNT_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS real_account_snapshots (

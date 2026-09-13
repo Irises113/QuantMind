@@ -24,6 +24,7 @@ from .node_history import router as node_history_router
 from .system_events import router as system_events_router
 from .finbert import router as finbert_router
 from .stock_pool import router as stock_pool_router
+from .risk import router as risk_router
 
 admin_router = APIRouter()
 admin_router.include_router(
@@ -95,3 +96,4 @@ admin_router.include_router(
 admin_router.include_router(
     stock_pool_router, prefix="/stock-pools", tags=["Admin-StockPool"]
 )
+admin_router.include_router(risk_router, tags=["Admin-Risk"])

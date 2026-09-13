@@ -75,7 +75,7 @@ const AdminPage: React.FC = () => {
             label: '交易核心', 
             children: [
                 { key: 'orders', label: '订单管理（开发中）' },
-                { key: 'risk', label: '风险控制（开发中）' },
+                { key: 'risk', label: '风险控制' },
             ]
         },
         { key: 'settings', icon: <SettingOutlined />, label: '系统设置' },

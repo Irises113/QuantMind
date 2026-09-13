@@ -11,6 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.services.trade_shared.models.order import Order
 from backend.services.trade_shared.models.risk_rule import RiskRule
 from backend.services.trade_shared.redis_client import RedisClient
+from backend.services.live_trading.services.risk_rule_types import (
+    RiskRuleValidationError,
+    validate_rule_parameters,
+)
 from backend.services.trade_shared.schemas.risk_rule import RiskRuleCreate, RiskRuleUpdate
 from backend.services.trade_shared.trade_config import settings
 from backend.shared.margin_stock_pool import get_margin_stock_pool_service
@@ -69,12 +73,19 @@ class RiskService:
 
     async def create_rule(self, rule_data: RiskRuleCreate) -> RiskRule:
         """Create a risk rule"""
+        existing = await self.get_rule_by_name(rule_data.rule_name)
+        if existing:
+            raise RiskRuleValidationError(f"rule_name already exists: {rule_data.rule_name}")
+        try:
+            parameters = validate_rule_parameters(rule_data.rule_type, rule_data.parameters)
+        except RiskRuleValidationError:
+            raise
         rule = RiskRule(
             rule_name=rule_data.rule_name,
             rule_type=rule_data.rule_type,
             description=rule_data.description,
             is_active=rule_data.is_active,
-            parameters=rule_data.parameters,
+            parameters=parameters,
             applies_to_all=rule_data.applies_to_all,
             user_ids=rule_data.user_ids,
             priority=rule_data.priority,
@@ -116,8 +127,14 @@ class RiskService:
             rule.description = update_data.description
         if update_data.is_active is not None:
             rule.is_active = update_data.is_active
-        if update_data.parameters is not None:
-            rule.parameters = update_data.parameters
+        if update_data.parameters is not None or update_data.rule_type is not None:
+            next_type = update_data.rule_type or rule.rule_type
+            next_params = (
+                update_data.parameters
+                if update_data.parameters is not None
+                else (rule.parameters or {})
+            )
+            rule.parameters = validate_rule_parameters(next_type, next_params)
         if update_data.applies_to_all is not None:
             rule.applies_to_all = update_data.applies_to_all
         if update_data.user_ids is not None:

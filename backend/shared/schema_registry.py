@@ -66,6 +66,7 @@ SCHEMA_SPECS: tuple[SchemaSpec, ...] = (
             "backend.services.trade_shared.models.order",
             "backend.services.trade_shared.models.trade",
             "backend.services.trade_shared.models.risk_rule",
+            "backend.services.trade_shared.models.risk_event",
             "backend.services.trade_shared.models.preflight_snapshot",
             "backend.services.trade_shared.models.real_account_snapshot",
         ),

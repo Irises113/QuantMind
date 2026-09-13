@@ -16,4 +16,6 @@ __all__ = [
     "RiskRuleCreate",
     "RiskRuleUpdate",
     "RiskRuleResponse",
+    "RiskEventResponse",
+    "RiskDryRunRequest",
 ]

@@ -178,6 +178,21 @@ async def lifespan(app: FastAPI):
             run_simulation_t1_unlock_task(),
             name="simulation-t1-unlock",
         )
+        from backend.services.live_trading.services.risk_trigger_scanner import (
+            RiskTriggerScanner,
+            scan_enabled,
+        )
+
+        if scan_enabled():
+            risk_scanner = RiskTriggerScanner(redis_client)
+            await risk_scanner.start()
+            app.state.risk_trigger_scanner = risk_scanner
+            logger.info(
+                "Risk trigger scanner started (interval=%ss)",
+                risk_scanner.interval_seconds,
+            )
+        else:
+            logger.info("Risk trigger scanner disabled (RISK_SCAN_ENABLED=false)")
         from backend.services.simulation.services.simulation_corporate_action_task import (
             run_simulation_corporate_action_task,
         )
@@ -336,6 +351,13 @@ async def lifespan(app: FastAPI):
         pass
 
     yield
+
+    risk_scanner = getattr(app.state, "risk_trigger_scanner", None)
+    if risk_scanner is not None:
+        try:
+            await risk_scanner.stop()
+        except Exception as e:
+            logger.warning("trade risk trigger scanner stop failed: %s", e)
 
     for task in (scanner_task, margin_task, snapshot_task, ledger_settlement_task, manual_execution_task, sandbox_signal_task, tdx_account_sync_task, qmt_account_sync_task, qmt_exec_poller_task, mirror_queue_drainer_task, tdx_quote_feed_task, tdx_l2_capture_task, tdx_l2_realtime_task, t1_unlock_task, corp_action_task):
         if task is None:

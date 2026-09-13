@@ -431,3 +431,70 @@ export interface StrategyTemplateUpsertRequest {
     live_config_tips?: string[];
     markets?: string[];
 }
+
+export type RiskRuleType =
+    | 'position_stop_loss'
+    | 'position_take_profit'
+    | 'market_index_move'
+    | 'max_order_size'
+    | 'min_order_size'
+    | 'max_position_size'
+    | 'max_daily_trades';
+
+export interface RiskRuleAdmin {
+    id: number;
+    rule_name: string;
+    rule_type: RiskRuleType | string;
+    description?: string | null;
+    is_active: boolean;
+    parameters: Record<string, any>;
+    applies_to_all: boolean;
+    user_ids?: number[] | null;
+    priority: number;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface RiskRuleUpsertRequest {
+    rule_name: string;
+    rule_type: string;
+    description?: string;
+    is_active?: boolean;
+    parameters: Record<string, any>;
+    applies_to_all: boolean;
+    user_ids?: number[] | null;
+    priority?: number;
+}
+
+export interface RiskEventAdmin {
+    id: number;
+    rule_id?: number | null;
+    rule_type: string;
+    tenant_id: string;
+    user_id: number;
+    trade_date: string;
+    symbol: string;
+    action: string;
+    status: string;
+    trigger_price?: number | null;
+    cost_price?: number | null;
+    pnl_pct?: number | null;
+    quantity?: number | null;
+    order_ids?: string[] | null;
+    message?: string | null;
+    created_at: string;
+}
+
+export interface RiskDryRunItem {
+    rule_id?: number | null;
+    rule_name: string;
+    rule_type: string;
+    symbol: string;
+    action: string;
+    quantity: number;
+    trigger_price?: number | null;
+    cost_price?: number | null;
+    pnl_pct?: number | null;
+    status: string;
+    message: string;
+}
