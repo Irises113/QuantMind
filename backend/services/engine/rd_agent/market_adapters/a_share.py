@@ -101,9 +101,9 @@ class AShareAdapter(MarketAdapter):
         参考已有因子作为构建基础。
 
         L2 高频因子（资金流/微观结构/已实现波动率）在 QuantDB 已预计算为日频值，
-        但 RD-Agent coder 只能写 Qlib 表达式（基于 OHLCV+amount），无法直接引用
-        这些 parquet 列。因此 L2 因子以「Qlib 表达式近似」形式提供给 LLM 作为
-        挖掘种子——LLM 可据此在微观结构/资金流概念空间里挖掘并改造因子。
+        RD-Agent coder 可读取 daily_pv.h5 中已接入的 QuantDB 预计算列，因此这里
+        同时给出「可直接引用」的列清单（$<列名>）与需要自行用 Qlib 表达式实现的
+        近似模板，供 LLM 在微观结构/资金流概念空间里挖掘并改造因子。
 
         Returns:
             生成的文件路径，失败返回 None。
@@ -144,6 +144,12 @@ class AShareAdapter(MarketAdapter):
             l2_expr = self._l2_factor_expressions()
             factors.update(l2_expr)
 
+            # QuantDB 已接入 daily_pv.h5 的预计算列：可在因子表达式中直接引用
+            for out_col, desc in self._usable_quantdb_columns().items():
+                factors[out_col] = (
+                    f"${out_col}（QuantDB 预计算列，可直接在表达式中引用；{desc}）"
+                )
+
             for feat in all_features:
                 feat_key = feat.get("key", "")
                 if not feat_key or feat_key in factors:
@@ -157,7 +163,7 @@ class AShareAdapter(MarketAdapter):
                 if formula:
                     parts.append(f"公式: {formula}")
                 factors[feat_key] = (
-                    " | ".join(parts) + "（QuantDB 已预计算，仅供参考实现思路，不可直接引用）"
+                    " | ".join(parts) + "（QuantDB 其余预计算列未接入 h5，仅供参考实现思路）"
                 )
 
             if not factors:
@@ -219,6 +225,56 @@ class AShareAdapter(MarketAdapter):
             "L2_InformedRatio": "Sum(Abs($close/Ref($close,1)-1) * $volume, 5) / (Std(Abs($close/Ref($close,1)-1), 20) * Sum($volume, 5) + 1e-12)",
             "L2_JumpCount": "Sum(Abs($close/Ref($close,1)-1) > Mean(Abs($close/Ref($close,1)-1), 20) * 3, 20)",
         }
+
+    @staticmethod
+    def _usable_quantdb_columns() -> dict[str, str]:
+        """已接入 daily_pv.h5 的 QuantDB 预计算列（输出列名 -> 简述）。
+
+        与 rd_loop_wrapper._ENRICH_* 白名单保持一致，避免提示与数据漂移。
+        """
+        desc = {
+            "rsi_14": "14日RSI",
+            "macd_hist": "MACD柱",
+            "atr_14": "14日ATR波动",
+            "beta_20": "20日市场beta",
+            "parkinson_20": "20日Parkinson波动率",
+            "bb_width": "布林带宽度",
+            "bb_pos": "收盘价在布林带位置",
+            "adx_14": "14日ADX趋势强度",
+            "maxdd_20": "20日最大回撤",
+            "idio_vol_20": "20日特质波动率",
+            "obv_slope": "OBV斜率",
+            "turn_5": "5日换手率",
+            "turn_20": "20日换手率",
+            "turn_z_20": "换手率z-score",
+            "mfi_14": "14日资金流指标",
+            "netflow_5": "5日净资金流",
+            "netflow_20": "20日净资金流",
+            "pe_ttm": "市盈率TTM",
+            "pb": "市净率",
+            "ps_ttm": "市销率TTM",
+            "div_yield": "股息率",
+            "ep": "盈利收益率",
+            "bp": "账面市值比",
+            "roe": "净资产收益率",
+            "peg": "PEG",
+            "np_growth": "净利润增速",
+            "np_ttm": "净利润TTM",
+            "total_mv": "总市值",
+            "float_mv": "流通市值",
+            "chip_profit_20": "20日筹码获利比例",
+            "ind_strength": "行业相对强度",
+            "concept_hot": "概念热度",
+        }
+        try:
+            from backend.services.engine.rd_agent.rd_loop_wrapper import (
+                _ENRICH_FEATURES_DAILY,
+                _ENRICH_L1,
+            )
+            names = list(_ENRICH_FEATURES_DAILY.values()) + list(_ENRICH_L1.values())
+        except Exception:
+            names = list(desc.keys())
+        return {n: desc.get(n, "QuantDB 预计算特征") for n in names}
 
     @staticmethod
     def _fallback_factors() -> dict[str, str]:

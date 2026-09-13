@@ -76,8 +76,42 @@ async def persist_factors(factors: list[dict], task_id: str, user_id: str, marke
     return count
 
 
-def compute_factor_ic(factor_code: str, data_path: str) -> dict:
+def _near_one_year_window() -> tuple[str, str]:
+    """近一年回测窗口（end=数据最新交易日，start=end 往前一年）。
+
+    优先从 QuantDB 交易日历取最新交易日，失败则退回今天。
+    """
+    import pandas as pd
+
+    end_ts = None
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        cal = QuantDBDataHub.get_instance().fetch_calendar()
+        if cal is not None and not cal.empty:
+            for col in ("trade_date", "date", "time", "cal_date", "TradingDate"):
+                if col in cal.columns:
+                    end_ts = pd.to_datetime(cal[col]).max()
+                    break
+    except Exception:
+        end_ts = None
+    if end_ts is None or pd.isna(end_ts):
+        end_ts = pd.Timestamp.today().normalize()
+    return (end_ts - pd.DateOffset(years=1)).strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")
+
+
+def compute_factor_ic(
+    factor_code: str,
+    data_path: str,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict:
     """执行因子代码并计算 IC 指标
+
+    Args:
+        factor_code: 因子源码（含 calculate_*）
+        data_path: daily_pv.h5 路径
+        start/end: 可选回测窗口（YYYY-MM-DD）；给定时只在该窗口内计算 IC
 
     Returns dict with: ic, rank_ic, icir, rank_icir (or empty dict on failure)
     """
@@ -134,6 +168,19 @@ try:
 
     # Load price data for returns
     price_df = pd.read_hdf("{data_path}")
+    # 可选：切片到回测窗口（end=最新交易日，start=end-N年）
+    _start = {start!r}
+    _end = {end!r}
+    if _start or _end:
+        _di = price_df.index.get_level_values(0)
+        if _start:
+            price_df = price_df[_di >= pd.Timestamp(_start)]
+            _di = price_df.index.get_level_values(0)
+        if _end:
+            price_df = price_df[_di <= pd.Timestamp(_end)]
+        if price_df.empty:
+            print("EMPTY_WINDOW")
+            sys.exit(1)
     if 'close' in price_df.columns.get_level_values(0):
         close = price_df['close']
     elif '$close' in price_df.columns.get_level_values(0):
@@ -353,6 +400,13 @@ def main():
             )
         logger.info("IC data path resolved: %s (exists=%s)", data_path, Path(data_path).exists())
 
+        # 回测窗口默认近一年（仅 A 股；其他市场数据日历不同，保持全样本）
+        if args.market == "a_share":
+            ic_start, ic_end = _near_one_year_window()
+            logger.info("IC window (recent 1y): %s ~ %s", ic_start, ic_end)
+        else:
+            ic_start, ic_end = None, None
+
         import hashlib
 
         from backend.services.engine.qlib_app.services.rd_agent_persistence import (
@@ -384,7 +438,7 @@ def main():
                     rank_ic = None
                     if Path(data_path).exists() and f.get("code"):
                         metrics = await asyncio.to_thread(
-                            compute_factor_ic, f["code"], data_path
+                            compute_factor_ic, f["code"], data_path, ic_start, ic_end
                         )
                         if metrics:
                             status = "completed"

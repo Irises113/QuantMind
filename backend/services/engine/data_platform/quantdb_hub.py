@@ -1003,6 +1003,54 @@ class QuantDBDataHub:
         )
         return self._normalize_columns(df)
 
+    def fetch_ml_columns(
+        self,
+        dataset: str,
+        columns: list[str],
+        start: date | None = None,
+        end: date | None = None,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """按列裁剪读取 ``6_ml_datasets/<dataset>`` 的指定特征列。
+
+        仅 SELECT symbol + 指定列 + dt（避免 l1/l2 等宽表整表扫描），返回含
+        ``symbol`` / ``trade_date``(datetime) + 指定列 的 DataFrame，可直接与
+        K 线按 ``symbol`` + ``trade_date`` 对齐。
+
+        Args:
+            dataset: features_daily / l1_factors / l2_factors / alpha_library
+            columns: 需要读取的特征列名（不含 symbol/dt/trade_date）
+            symbols: 可选，限定股票（后缀格式），减少读取量（debug 场景）
+        """
+        rel = f"6_ml_datasets/{dataset}"
+        dates = self._partition_dates(rel, start, end)
+        if not dates:
+            return pd.DataFrame()
+        reserved = {"symbol", "dt", "trade_date"}
+        quoted = [f'"{c}"' for c in columns if c not in reserved]
+        if not quoted:
+            return pd.DataFrame()
+        cols = ", ".join(["symbol", *quoted])
+        where_sql = ""
+        bind: list | None = None
+        if symbols:
+            placeholders = ", ".join("?" for _ in symbols)
+            where_sql = f"symbol IN ({placeholders})"
+            bind = [str(s) for s in symbols]
+        df = self._read_partitioned(
+            rel, dates, cols=cols, where_sql=where_sql, order_by="symbol, dt", bind=bind
+        )
+        if df.empty:
+            return df
+        if "dt" in df.columns:
+            df = df.rename(columns={"dt": "trade_date"})
+            df["trade_date"] = pd.to_datetime(
+                df["trade_date"].astype(str), format="%Y%m%d", errors="coerce"
+            )
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].astype(str)
+        return df
+
     # ------------------------------------------------------------------
     # 融资融券
     # ------------------------------------------------------------------

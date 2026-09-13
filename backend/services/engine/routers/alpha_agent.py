@@ -814,6 +814,28 @@ def _resolve_instruments_for_universe(
     return D.instruments(market="all")
 
 
+def _default_backtest_window(market: str = "a_share") -> tuple[str, str]:
+    """默认回测窗口：近一年（end=数据最新交易日，start=end 往前一年）。"""
+    import pandas as pd
+
+    end_ts = None
+    try:
+        if market == "a_share":
+            from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+            cal = QuantDBDataHub.get_instance().fetch_calendar()
+            if cal is not None and not cal.empty:
+                for col in ("trade_date", "date", "time", "cal_date", "TradingDate"):
+                    if col in cal.columns:
+                        end_ts = pd.to_datetime(cal[col]).max()
+                        break
+    except Exception as exc:
+        logger.warning("[alpha-backtest] resolve default window failed: %s", exc)
+    if end_ts is None or pd.isna(end_ts):
+        end_ts = pd.Timestamp.today().normalize()
+    return (end_ts - pd.DateOffset(years=1)).strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")
+
+
 async def _run_factor_backtest(
     factor_id: str,
     factor_code: str,
@@ -830,8 +852,9 @@ async def _run_factor_backtest(
         data_source: 'qlib_bin' (默认) | 'h5'
     """
     market_upper = _MARKET_TO_QLIB.get(market, "CN")
-    end = end_date or "2024-12-31"
-    start = start_date or "2024-01-01"
+    _default_start, _default_end = _default_backtest_window(market)
+    end = end_date or _default_end
+    start = start_date or _default_start
 
     try:
         kind = _detect_factor_kind(factor_code)
@@ -1240,8 +1263,9 @@ async def _run_lightweight_backtest(
         if kind != "factor_class":
             raise RuntimeError("因子代码中未找到可调用的 Factor 类")
 
-        end = end_date or "2024-12-31"
-        start = start_date or "2024-01-01"
+        _default_start, _default_end = _default_backtest_window("a_share")
+        end = end_date or _default_end
+        start = start_date or _default_start
 
         # Universes with a native Qlib instruments file can be passed straight through;
         # the rest (sse50, gem, star, all_a) are resolved from QuantDB index weights.
@@ -1402,8 +1426,9 @@ async def _backtest_functional_factor(
         import sys as _sys
         from pathlib import Path
 
-        end = end_date or "2024-12-31"
-        start = start_date or "2024-01-01"
+        _default_start, _default_end = _default_backtest_window("a_share")
+        start = start_date or _default_start
+        end = end_date or _default_end
 
         # 市场 → H5 数据文件（因子代码读 daily_pv.h5，subprocess chdir 到 /tmp）
         data_path = _resolve_factor_h5_path(universe)
@@ -1442,6 +1467,18 @@ try:
     if factor_df.empty:
         print("EMPTY_FACTOR"); sys.exit(1)
     price_df = pd.read_hdf({repr(str(data_path))})
+    # 切片到回测窗口（默认近一年，由调用方解析）
+    _start = {start!r}
+    _end = {end!r}
+    if _start or _end:
+        _di = price_df.index.get_level_values(0)
+        if _start:
+            price_df = price_df[_di >= pd.Timestamp(_start)]
+            _di = price_df.index.get_level_values(0)
+        if _end:
+            price_df = price_df[_di <= pd.Timestamp(_end)]
+        if price_df.empty:
+            print("EMPTY_WINDOW"); sys.exit(1)
     if 'close' in price_df.columns.get_level_values(0):
         close = price_df['close']
     elif '$close' in price_df.columns.get_level_values(0):

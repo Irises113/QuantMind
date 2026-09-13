@@ -442,6 +442,9 @@ export interface BacktestStartParams {
   configPath?: string;
   universe?: string;
   dataSource?: 'qlib_bin' | 'h5';
+  /** 回测窗口起止（YYYY-MM-DD）；缺省后端默认近一年 */
+  startDate?: string;
+  endDate?: string;
 }
 
 export async function startBacktest(
@@ -457,6 +460,8 @@ export async function startBacktest(
   const qs = new URLSearchParams();
   if (params.universe) qs.set('universe', params.universe);
   if (params.dataSource) qs.set('data_source', params.dataSource);
+  if (params.startDate) qs.set('start_date', params.startDate);
+  if (params.endDate) qs.set('end_date', params.endDate);
   const query = qs.toString();
   const res = await apiClient.post(
     `/alpha-agent/factors/${factorId}/backtest${query ? `?${query}` : ''}`,

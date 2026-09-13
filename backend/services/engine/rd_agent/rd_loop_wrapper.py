@@ -26,6 +26,49 @@ from .market_adapters.base import MarketAdapter
 
 logger = logging.getLogger(__name__)
 
+# QuantDB 富化列白名单（仅 A 股）：{源列名: 输出列名}，输出列在 h5 中加 "$" 前缀。
+# 这些列会随 daily_pv.h5 一起提供给 RD-Agent，LLM 可直接在因子表达式中引用
+# （$<输出列名>），使因子能用上 QuantDB 的预计算技术指标/估值/资金流/筹码等富数据。
+_ENRICH_FEATURES_DAILY: dict[str, str] = {
+    "rsi_14": "rsi_14",
+    "macd_hist": "macd_hist",
+    "vol_atr_14": "atr_14",
+    "beta_20": "beta_20",
+    "pe_ttm": "pe_ttm",
+    "pb": "pb",
+    "ps_ttm": "ps_ttm",
+    "dividend_rate": "div_yield",
+    "total_mv": "total_mv",
+    "float_mv": "float_mv",
+    "net_profit_ttm": "np_ttm",
+}
+_ENRICH_L1: dict[str, str] = {
+    "turn_5": "turn_5",
+    "turn_20": "turn_20",
+    "turn_z_20": "turn_z_20",
+    "amt_net_flow_5": "netflow_5",
+    "amt_net_flow_20": "netflow_20",
+    "mfi_14": "mfi_14",
+    "obv_slope_20": "obv_slope",
+    "vol_parkinson_20": "parkinson_20",
+    "tech_bb_width": "bb_width",
+    "tech_bb_pos": "bb_pos",
+    "tech_adx_14": "adx_14",
+    "tech_max_drawdown_20": "maxdd_20",
+    "fun_bp": "bp",
+    "fun_ep": "ep",
+    "fun_roe": "roe",
+    "fun_peg": "peg",
+    "fun_np_growth": "np_growth",
+    "chip_profit_ratio_20": "chip_profit_20",
+    "style_idio_vol_20": "idio_vol_20",
+    "ind_strength_20": "ind_strength",
+    "concept_hot_score": "concept_hot",
+}
+_ENRICH_OUTPUT_COLUMNS: tuple[str, ...] = tuple(
+    _ENRICH_FEATURES_DAILY.values()
+) + tuple(_ENRICH_L1.values())
+
 
 class RDLoopWrapper:
     """封装 RD-Agent FactorRDLoop，提供 QuantMind 兼容接口"""
@@ -469,45 +512,39 @@ class RDLoopWrapper:
         H5 格式:
         - Key: "data"
         - Index: MultiIndex [datetime, instrument]
-        - Columns: ["$open", "$high", "$low", "$close", "$volume", "$factor"]
+        - Columns: ["$open", "$high", "$low", "$close", "$volume", "$amount",
+          "$factor", <QuantDB 富化列 ...>]
         - instrument 格式: Qlib 格式 sh600036
+
+        生成的富化文件先写入共享缓存 ``<quantdb_dir>/.h5_cache/``（按最新分区
+        自动失效），再硬链/软链到任务目录，避免每个挖掘任务重复生成 GB 级文件。
 
         Returns:
             True if h5 file was generated/already current, False on failure.
         """
-        if os.path.exists(output_path):
-            # 检查 parquet 最新日期是否比 h5 新
-            try:
-                h5_mtime = os.path.getmtime(output_path)
-                kline_dir = os.path.join(quantdb_dir, "1_kline_data", "daily_forward")
-                if os.path.isdir(kline_dir):
-                    partitions = [d for d in os.listdir(kline_dir) if d.startswith("dt=")]
-                    if partitions:
-                        latest_dt = max(partitions)
-                        latest_parquet = os.path.join(kline_dir, latest_dt, "data.parquet")
-                        if os.path.exists(latest_parquet) and os.path.getmtime(latest_parquet) > h5_mtime:
-                            logger.info("[%s] Parquet newer than h5, regenerating: %s", self.market, output_path)
-                        else:
-                            return True
-                    else:
-                        return True
-                else:
-                    return True
-            except Exception:
-                return True
+        cache_dir = os.path.join(quantdb_dir, ".h5_cache")
+        cache_path = os.path.join(
+            cache_dir, "daily_pv_debug.h5" if debug else "daily_pv_all.h5"
+        )
+
+        # 共享缓存命中：直接链接到任务目录（避免重复生成）
+        if os.path.exists(cache_path) and self._h5_cache_fresh(quantdb_dir, cache_path):
+            logger.info("[%s] h5 cache hit: %s", self.market, cache_path)
+            self._link_h5(cache_path, output_path)
+            return True
 
         try:
             from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
             hub = QuantDBDataHub(quantdb_dir)
             if not hub.available:
                 logger.error("[%s] QuantDBDataHub not available for h5 generation", self.market)
-                return False
+                return self._use_stale_cache(cache_path, output_path)
 
             # 获取股票列表
             df_stocks = hub.fetch_stock_list()
             if df_stocks.empty:
                 logger.error("[%s] No stock list from QuantDB", self.market)
-                return False
+                return self._use_stale_cache(cache_path, output_path)
 
             symbol_col = "Symbol" if "Symbol" in df_stocks.columns else "symbol"
             symbols = df_stocks[symbol_col].dropna().unique()
@@ -518,17 +555,16 @@ class RDLoopWrapper:
 
             import numpy as np
 
+            symbols = [str(s) for s in symbols]
+            start_d, end_d = date(2020, 1, 1), date(2026, 12, 31)
+
             # 批量读取：一次查全部 symbol，避免逐股票 N 次分区扫描
             # （早期实现对 ~5400 只股票各查 2 次，单次生成需 40 分钟以上）
-            df = hub.fetch_daily_kline_batch(
-                [str(s) for s in symbols], date(2020, 1, 1), date(2026, 12, 31), adjust="qfq"
-            )
+            df = hub.fetch_daily_kline_batch(symbols, start_d, end_d, adjust="qfq")
             if df is None or df.empty:
                 logger.error("[%s] No K-line data read from QuantDB", self.market)
-                return False
-            df_unadj = hub.fetch_daily_kline_batch(
-                [str(s) for s in symbols], date(2020, 1, 1), date(2026, 12, 31), adjust="none"
-            )
+                return self._use_stale_cache(cache_path, output_path)
+            df_unadj = hub.fetch_daily_kline_batch(symbols, start_d, end_d, adjust="none")
 
             # 前复权价可能为负（高分红股票多年除权后 qfq 价转负），会污染 Qlib 因子
             # 计算，这里整体剔除这些行。
@@ -543,7 +579,7 @@ class RDLoopWrapper:
                 df = df.loc[valid].reset_index(drop=True)
             if df.empty:
                 logger.error("[%s] No positive-price K-line rows from QuantDB", self.market)
-                return False
+                return self._use_stale_cache(cache_path, output_path)
 
             # 按 (symbol, trade_date) 对齐不复权收盘价以计算 $factor
             if df_unadj is not None and not df_unadj.empty:
@@ -560,16 +596,28 @@ class RDLoopWrapper:
             else:
                 factor = np.ones(len(df))
 
+            # 合并 QuantDB 富化列（技术指标/估值/资金流/筹码等），供因子直接引用
+            df = self._merge_enrich(
+                df, hub, start_d, end_d, None if not debug else symbols
+            )
+
             instruments = [self._to_qlib_symbol(str(s)) for s in df["symbol"]]
+            data: dict[str, Any] = {
+                "$open": df["open"].to_numpy(dtype="float64"),
+                "$high": df["high"].to_numpy(dtype="float64"),
+                "$low": df["low"].to_numpy(dtype="float64"),
+                "$close": df["close"].to_numpy(dtype="float64"),
+                "$volume": df["volume"].to_numpy(dtype="float64"),
+                "$factor": factor,
+            }
+            if "amount" in df.columns:
+                data["$amount"] = df["amount"].to_numpy(dtype="float64")
+            for out_col in _ENRICH_OUTPUT_COLUMNS:
+                if out_col in df.columns:
+                    data[f"${out_col}"] = df[out_col].to_numpy(dtype="float32")
+
             combined = pd.DataFrame(
-                {
-                    "$open": df["open"].to_numpy(dtype="float64"),
-                    "$high": df["high"].to_numpy(dtype="float64"),
-                    "$low": df["low"].to_numpy(dtype="float64"),
-                    "$close": df["close"].to_numpy(dtype="float64"),
-                    "$volume": df["volume"].to_numpy(dtype="float64"),
-                    "$factor": factor,
-                },
+                data,
                 index=pd.MultiIndex.from_arrays(
                     [pd.to_datetime(df["trade_date"]), instruments],
                     names=["datetime", "instrument"],
@@ -577,14 +625,113 @@ class RDLoopWrapper:
             )
             combined = combined.sort_index()
 
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            combined.to_hdf(output_path, key="data", mode="w")
-            logger.info("[%s] Generated h5 from parquet: %s (%d rows)", self.market, output_path, len(combined))
+            os.makedirs(cache_dir, exist_ok=True)
+            tmp_path = cache_path + ".tmp"
+            combined.to_hdf(tmp_path, key="data", mode="w")
+            os.replace(tmp_path, cache_path)
+            self._link_h5(cache_path, output_path)
+            logger.info(
+                "[%s] Generated enriched h5 from parquet: %s (%d rows, %d cols)",
+                self.market, cache_path, len(combined), combined.shape[1],
+            )
             return True
 
         except Exception as exc:
             logger.error("[%s] Failed to generate h5 from parquet: %s", self.market, exc)
+            return self._use_stale_cache(cache_path, output_path)
+
+    def _merge_enrich(
+        self,
+        df: pd.DataFrame,
+        hub: Any,
+        start: date,
+        end: date,
+        symbols: list[str] | None,
+    ) -> pd.DataFrame:
+        """把 QuantDB 富化列按 (symbol, trade_date) 左连接到 K 线 DataFrame。"""
+        for dataset, mapping in (
+            ("features_daily", _ENRICH_FEATURES_DAILY),
+            ("l1_factors", _ENRICH_L1),
+        ):
+            try:
+                sub = hub.fetch_ml_columns(
+                    dataset, list(mapping.keys()), start, end, symbols=symbols
+                )
+            except Exception as exc:
+                logger.warning("[%s] Enrich from %s failed: %s", self.market, dataset, exc)
+                continue
+            if sub is None or sub.empty:
+                logger.warning("[%s] No enrich data from %s", self.market, dataset)
+                continue
+            sub = sub.rename(columns=mapping)
+            sub["trade_date"] = pd.to_datetime(sub["trade_date"])
+            keep = [c for c in ("symbol", "trade_date", *mapping.values()) if c in sub.columns]
+            df = df.merge(sub[keep], on=["symbol", "trade_date"], how="left")
+            logger.info(
+                "[%s] Enriched h5 with %d cols from %s", self.market, len(keep) - 2, dataset
+            )
+        return df
+
+    @staticmethod
+    def _latest_partition_mtime(quantdb_dir: str, rel_path: str) -> float:
+        """返回某数据集最新分区内 parquet 的最大 mtime（无则 0）。"""
+        base = Path(quantdb_dir) / rel_path
+        if not base.is_dir():
+            return 0.0
+        try:
+            dirs = [d for d in base.iterdir() if d.is_dir() and d.name.startswith("dt=")]
+            if not dirs:
+                return 0.0
+            latest = max(dirs, key=lambda d: d.name)
+            mtimes = [f.stat().st_mtime for f in latest.glob("*.parquet")]
+            return max(mtimes) if mtimes else latest.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _h5_cache_fresh(self, quantdb_dir: str, cache_path: str) -> bool:
+        """判断共享缓存是否仍是最新（K 线/features_daily/l1 最新分区均不晚于缓存）。"""
+        try:
+            cache_mtime = os.path.getmtime(cache_path)
+        except OSError:
             return False
+        sources = (
+            "1_kline_data/daily_forward",
+            "6_ml_datasets/features_daily",
+            "6_ml_datasets/l1_factors",
+        )
+        latest = max(self._latest_partition_mtime(quantdb_dir, rel) for rel in sources)
+        return latest > 0 and cache_mtime >= latest
+
+    @staticmethod
+    def _link_h5(src: str, dst: str) -> None:
+        """把共享缓存的 h5 链接（优先硬链）到任务目录，失败则复制。"""
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        try:
+            if os.path.islink(dst) or os.path.exists(dst):
+                os.remove(dst)
+        except OSError:
+            pass
+        for linker in (
+            lambda: os.link(src, dst),
+            lambda: os.symlink(os.path.abspath(src), dst),
+            lambda: shutil.copy2(src, dst),
+        ):
+            try:
+                linker()
+                return
+            except OSError:
+                continue
+            except Exception:
+                continue
+        logger.warning("[RDLoopWrapper] Failed to link/copy h5 %s -> %s", src, dst)
+
+    def _use_stale_cache(self, cache_path: str, output_path: str) -> bool:
+        """生成失败时回退到已有（可能过期）缓存，尽量不阻断任务。"""
+        if os.path.exists(cache_path):
+            logger.warning("[%s] Reusing stale h5 cache: %s", self.market, cache_path)
+            self._link_h5(cache_path, output_path)
+            return True
+        return False
 
     @staticmethod
     def _to_qlib_symbol(symbol: str) -> str:
