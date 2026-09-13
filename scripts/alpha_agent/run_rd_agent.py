@@ -96,9 +96,26 @@ import sys, os, tempfile, traceback
 
 os.chdir(tempfile.gettempdir())
 
+# 清理上一因子残留的结果文件，避免误读陈旧 result.h5
+for _f in list(os.listdir('.')):
+    if _f.endswith('.h5') and _f != 'daily_pv.h5':
+        try:
+            os.remove(_f)
+        except OSError:
+            pass
+
 try:
     # Execute factor code
     {factor_code}
+
+    # 若因子代码未自执行（无 __main__ 守卫）或未产出 result.h5，则显式调用 calculate_*()
+    _has_result = any(f.endswith('.h5') and 'result' in f.lower() for f in os.listdir('.'))
+    if not _has_result:
+        _fns = [v for k, v in globals().items() if k.startswith('calculate_') and callable(v)]
+        if _fns:
+            _res = _fns[0]()
+            if _res is not None and hasattr(_res, 'to_hdf'):
+                _res.to_hdf('result.h5', key='data', mode='w')
 
     # Find the result H5 file
     result_files = [f for f in os.listdir('.') if f.endswith('.h5') and 'result' in f.lower()]
@@ -281,14 +298,23 @@ def main():
         logger.info("Persisted %d factors to database", count)
 
         # Compute IC metrics for persisted factors
-        # Use market-specific data path
+        # 数据路径优先本次任务实际生成的 daily_pv.h5（A股由 _ensure_data_file 生成），
+        # 其次各市场预生成文件，最后回退 seed 模板。
         market_data_paths = {
             "crypto": "/app/db/crypto_data/5min_pv.h5",
             "hong_kong": "/app/db/hk_data/daily_pv.h5",
             "us_stock": "/app/db/us_data/daily_pv.h5",
             "futures": "/app/db/futures_data/daily_pv.h5",
         }
-        data_path = market_data_paths.get(args.market, "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5")
+        local_h5 = Path(log_dir) / "git_ignore_folder" / "factor_implementation_source_data" / "daily_pv.h5"
+        if local_h5.exists():
+            data_path = str(local_h5)
+        else:
+            data_path = market_data_paths.get(
+                args.market,
+                "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5",
+            )
+        logger.info("IC data path resolved: %s (exists=%s)", data_path, Path(data_path).exists())
         if Path(data_path).exists():
             logger.info("Computing IC metrics for %d factors...", len(factors))
             from backend.services.engine.qlib_app.services.rd_agent_persistence import RDAgentFactorPersistence
