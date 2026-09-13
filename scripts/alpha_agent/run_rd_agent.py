@@ -174,34 +174,53 @@ try:
         print("INSUFFICIENT_CLEAN_DATA")
         sys.exit(1)
 
-    # Compute IC (Spearman rank correlation)
-    from scipy import stats
-    ic_values = []
-    for dt in f.index.get_level_values(0).unique():
-        f_dt = f.loc[dt] if dt in f.index.get_level_values(0) else None
-        r_dt = r.loc[dt] if dt in r.index.get_level_values(0) else None
-        if f_dt is not None and r_dt is not None and len(f_dt) > 5:
-            common = f_dt.index.intersection(r_dt.index)
-            if len(common) > 5:
-                corr, _ = stats.spearmanr(f_dt.loc[common], r_dt.loc[common])
-                if np.isfinite(corr):
-                    ic_values.append(corr)
+    # Compute IC：向量化日度 Spearman（秩的 Pearson），避免逐日 spearmanr 过慢
+    df_ic = pd.DataFrame({"f": f.values, "r": r.values})
+    df_ic["date"] = f.index.get_level_values(0)
+    df_ic = df_ic[np.isfinite(df_ic["f"]) & np.isfinite(df_ic["r"])]
+    if len(df_ic) < 100:
+        print("INSUFFICIENT_CLEAN_DATA")
+        sys.exit(1)
 
-    if not ic_values:
+    g = df_ic.groupby("date")
+    df_ic["fr"] = g["f"].rank(method="average")
+    df_ic["rr"] = g["r"].rank(method="average")
+    g = df_ic.groupby("date")
+    means = g[["fr", "rr"]].transform("mean")
+    df_ic["fc"] = df_ic["fr"] - means["fr"]
+    df_ic["rc"] = df_ic["rr"] - means["rr"]
+    df_ic["fcr"] = df_ic["fc"] * df_ic["rc"]
+    df_ic["fc2"] = df_ic["fc"] ** 2
+    df_ic["rc2"] = df_ic["rc"] ** 2
+    sums = g[["fcr", "fc2", "rc2"]].transform("sum")
+    counts = g["fcr"].transform("count")
+    n = (counts - 1).clip(lower=1)
+    cov = sums["fcr"] / n
+    var_f = sums["fc2"] / n
+    var_r = sums["rc2"] / n
+    denom = np.sqrt(var_f * var_r)
+    df_ic["corr"] = np.where(
+        denom > 1e-12, cov / np.where(denom > 1e-12, denom, 1.0), np.nan
+    )
+    ic_by_day = g["corr"].first().dropna()
+    ic_by_day = ic_by_day[np.isfinite(ic_by_day)]
+
+    if len(ic_by_day) == 0:
         print("NO_IC_VALUES")
         sys.exit(1)
 
-    ic = np.mean(ic_values)
-    rank_ic = np.median(ic_values)
-    icir = np.mean(ic_values) / (np.std(ic_values) + 1e-8)
-    rank_icir = rank_ic / (np.std(ic_values) + 1e-8)
+    ic = float(ic_by_day.mean())
+    rank_ic = float(ic_by_day.median())
+    std = float(ic_by_day.std(ddof=1)) if len(ic_by_day) > 1 else 0.0
+    icir = ic / (std + 1e-8)
+    rank_icir = rank_ic / (std + 1e-8)
 
     print(f"IC={{ic:.4f}}")
     print(f"RANK_IC={{rank_ic:.4f}}")
     print(f"ICIR={{icir:.4f}}")
     print(f"RANK_ICIR={{rank_icir:.4f}}")
     print(f"OBSERVATIONS={{len(f)}}")
-    print(f"IC_DATES={{len(ic_values)}}")
+    print(f"IC_DATES={{len(ic_by_day)}}")
 
 except Exception as e:
     print(f"ERROR: {{e}}")
