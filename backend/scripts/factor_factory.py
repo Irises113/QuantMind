@@ -375,43 +375,35 @@ def generate_binary_factors(
 
 
 def _rank_rows(a: np.ndarray) -> np.ndarray:
-    """按行平均秩（NaN 保持 NaN）。a: (n_days, n_syms)。"""
+    """按行平均秩（NaN 保持 NaN）。全向量化，无逐日 Python 循环。a: (n_days, n_syms)。"""
     d, n = a.shape
-    out = np.full((d, n), np.nan, dtype=np.float64)
-    for i in range(d):
-        row = a[i]
-        mask = np.isfinite(row)
-        m = int(mask.sum())
-        if m < 5:
-            continue
-        idx = np.flatnonzero(mask)
-        vals = row[idx]
-        order = np.argsort(vals, kind="mergesort")
-        r = np.empty(m, dtype=np.float64)
-        r[order] = np.arange(1, m + 1, dtype=np.float64)
-        sv = vals[order]
-        if m > 1:
-            change = np.flatnonzero(sv[1:] != sv[:-1])
-            starts = np.concatenate(([0], change + 1))
-            ends = np.concatenate((change + 1, [m]))
-            for s, e in zip(starts, ends, strict=False):
-                if e - s > 1:
-                    r[order[s:e]] = (s + 1 + e) / 2.0
-        out[i, idx] = r
-    return out
+    valid = np.isfinite(a)
+    aa = np.where(valid, a, np.inf)
+    order = np.argsort(aa, axis=1, kind="mergesort")
+    a_sorted = np.take_along_axis(aa, order, axis=1)
+    j = np.arange(n)
+    change = np.ones((d, n), dtype=bool)
+    if n > 1:
+        change[:, 1:] = a_sorted[:, 1:] != a_sorted[:, :-1]
+    start_sorted = np.maximum.accumulate(np.where(change, j, 0), axis=1)
+    bwd = np.where(change, j, 10**9)
+    nxt_from_right = np.minimum.accumulate(bwd[:, ::-1], axis=1)[:, ::-1]
+    nxt_strict = np.concatenate([nxt_from_right[:, 1:], np.full((d, 1), 10**9)], axis=1)
+    end_sorted = np.minimum(nxt_strict, n) - 1
+    avg = (start_sorted + end_sorted + 2) / 2.0  # 1-based 平均秩
+    ranks = np.empty((d, n), dtype=np.float64)
+    ranks[np.arange(d)[:, None], order] = avg
+    ranks[~valid] = np.nan
+    return ranks
 
 
-def _daily_rank_ic(fac: np.ndarray, fwd: np.ndarray) -> np.ndarray:
-    """逐日横截面 Spearman IC（秩的 Pearson），返回每天一个 IC。"""
-    rf = _rank_rows(fac)
-    rr = _rank_rows(fwd)
+def _rank_ic_from_ranks(rf: np.ndarray, rr: np.ndarray) -> np.ndarray:
+    """由两侧秩矩阵计算逐日秩相关（Spearman = 秩的 Pearson）。"""
     m = np.isfinite(rf) & np.isfinite(rr)
     cnt = m.sum(axis=1).astype(np.float64)
-    rfz = np.where(m, rf, 0.0)
-    rrz = np.where(m, rr, 0.0)
     den = np.maximum(cnt, 1.0)
-    fm = rfz.sum(axis=1) / den
-    rm = rrz.sum(axis=1) / den
+    fm = np.where(m, rf, 0.0).sum(axis=1) / den
+    rm = np.where(m, rr, 0.0).sum(axis=1) / den
     fc = np.where(m, rf - fm[:, None], 0.0)
     rc = np.where(m, rr - rm[:, None], 0.0)
     cov = (fc * rc).sum(axis=1) / den
@@ -426,7 +418,7 @@ def _daily_rank_ic(fac: np.ndarray, fwd: np.ndarray) -> np.ndarray:
 def screen_one(
     name: str,
     fac: pd.DataFrame,
-    fwd: np.ndarray,
+    fwd_rank: np.ndarray,
     expr: str,
     field: str,
     *,
@@ -434,10 +426,10 @@ def screen_one(
 ) -> dict:
     vals = fac.to_numpy(dtype=np.float32)
     coverage = float(np.isfinite(vals).mean())
-    if coverage < min_coverage or vals.shape[0] != fwd.shape[0]:
+    if coverage < min_coverage or vals.shape[0] != fwd_rank.shape[0]:
         return {"factor_name": name, "expression": expr, "field": field,
                 "ic": np.nan, "icir": np.nan, "coverage": coverage, "n_ic_days": 0}
-    ic = _daily_rank_ic(vals, fwd)
+    ic = _rank_ic_from_ranks(_rank_rows(vals), fwd_rank)
     ic_mean = float(ic.mean()) if ic.size else np.nan
     ic_std = float(ic.std(ddof=1)) if ic.size > 1 else np.nan
     icir = float(ic_mean / ic_std) if ic_std and ic_std > 0 else 0.0
@@ -621,6 +613,7 @@ def run(args: argparse.Namespace) -> None:
 
     close_win = _slice(close, start_ts, end_ts)
     fwd_win = (close_win.shift(-args.horizon) / close_win - 1.0).to_numpy(dtype=np.float32)
+    fwd_rank = _rank_rows(fwd_win)  # 前瞻收益秩只算一次，全因子复用
 
     # 2) pass1：逐字段生成 + 只保留指标（内存 O(一个字段)）
     rows: list[dict] = []
@@ -630,7 +623,7 @@ def run(args: argparse.Namespace) -> None:
         )
         for name, (v, expr) in facs.items():
             rows.append(screen_one(
-                name, _slice(v, start_ts, end_ts), fwd_win, expr, field,
+                name, _slice(v, start_ts, end_ts), fwd_rank, expr, field,
                 min_coverage=args.min_coverage,
             ))
         del facs
@@ -641,7 +634,7 @@ def run(args: argparse.Namespace) -> None:
             base, BINARY_ANCHORS, windows=windows, ops=binary_ops
         ).items():
             rows.append(screen_one(
-                name, _slice(v, start_ts, end_ts), fwd_win, expr, "binary",
+                name, _slice(v, start_ts, end_ts), fwd_rank, expr, "binary",
                 min_coverage=args.min_coverage,
             ))
     screened = pd.DataFrame(rows)
