@@ -40,6 +40,7 @@ _PASSWORD_FIELD = "ssh_password"
 _KEY_FIELD = "ssh_key"
 _PUBLIC_FIELDS = (
     "id", "name", "host", "port", "user", "work_dir", "docker_image", "gpus", "exec_mode",
+    "quantdb_dir",
 )
 
 
@@ -118,6 +119,7 @@ def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
             "docker_image": str(node.get("docker_image") or "quantmind-oss:latest").strip(),
             "gpus": str(node.get("gpus") or "all").strip(),
             "exec_mode": exec_mode,
+            "quantdb_dir": str(node.get("quantdb_dir") or "").strip() or "/data/quantdb",
         })
     else:
         existing["name"] = str(node.get("name") or existing.get("name") or node_id).strip()
@@ -129,6 +131,7 @@ def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
             node.get("docker_image") or existing.get("docker_image") or "quantmind-oss:latest"
         ).strip()
         existing["gpus"] = str(node.get("gpus") or existing.get("gpus") or "all").strip()
+        existing["quantdb_dir"] = str(node.get("quantdb_dir") or existing.get("quantdb_dir") or "/data/quantdb").strip()
         if node.get("exec_mode"):
             existing["exec_mode"] = str(node["exec_mode"]).strip()
         # 密码/密钥留空 = 保持不变
