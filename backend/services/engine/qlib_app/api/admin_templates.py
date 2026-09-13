@@ -70,6 +70,7 @@ class TemplateCreateRequest(BaseModel):
     live_defaults: dict[str, Any] = {}
     live_config_tips: list[str] = []
     markets: list[str] = []  # a_share, hong_kong, us_stock, crypto
+    dir: str = ""  # AI-IDE 虚拟目录/文件夹
 
     @field_validator("category")
     @classmethod
@@ -134,7 +135,18 @@ def _write_template(template_id: str, data: TemplateCreateRequest) -> None:
         "live_defaults": data.live_defaults,
         "live_config_tips": data.live_config_tips,
         "markets": data.markets,
+        "dir": data.dir,
     }
+
+    # PUT 更新时若请求未带 dir，保留文件里已有的虚拟目录，避免被清空。
+    if not data.dir and json_path.is_file():
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                existing = json.load(f)
+            if existing.get("dir"):
+                metadata["dir"] = existing["dir"]
+        except Exception:
+            pass
 
     templates_dir = _resolve_templates_dir()
     templates_dir.mkdir(parents=True, exist_ok=True)

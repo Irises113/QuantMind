@@ -23,6 +23,9 @@ export interface StrategyTemplate {
   execution_defaults?: Record<string, unknown>;
   live_defaults?: Record<string, unknown>;
   live_config_tips?: string[];
+  markets?: string[];
+  /** AI-IDE 虚拟目录/文件夹（如 "A股策略/01_宽基多因子"） */
+  dir?: string;
 }
 
 /**

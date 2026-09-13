@@ -53,6 +53,7 @@ class StrategyTemplate(BaseModel):
     live_defaults: dict[str, Any] = {}
     live_config_tips: list[str] = []
     markets: list[str] = []  # a_share, hong_kong, us_stock, crypto; 空列表表示适用所有市场
+    dir: str = ""  # AI-IDE 虚拟目录/文件夹（如 "A股策略/01_宽基多因子"）
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +153,7 @@ class StrategyTemplateLoader:
                 live_defaults=meta.get("live_defaults", {}),
                 live_config_tips=meta.get("live_config_tips", []),
                 markets=meta.get("markets", []),
+                dir=meta.get("dir", ""),
             )
         except Exception as e:
             task_logger.error("build_template_failed", "构建模板对象失败", template_id=json_path.stem, error=str(e))

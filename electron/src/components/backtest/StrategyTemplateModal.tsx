@@ -3,7 +3,7 @@
  * 打开时实时从后端加载模板列表，选中后自动关闭。
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   X,
   RefreshCw,
@@ -14,6 +14,7 @@ import {
   Shield,
   BookOpen,
   AlertTriangle,
+  Folder,
 } from 'lucide-react';
 import { StrategyTemplate } from '../../data/qlibStrategyTemplates';
 import { strategyTemplateService } from '../../features/strategy-wizard/services/strategyTemplateService';
@@ -92,6 +93,17 @@ export const StrategyTemplateModal: React.FC<StrategyTemplateModalProps> = ({
 
   const filtered =
     category === 'all' ? templates : templates.filter((t) => t.category === category);
+
+  // 按 AI-IDE 虚拟目录（dir）分组展示，无 dir 的归入「通用策略」
+  const grouped = useMemo(() => {
+    const map = new Map<string, StrategyTemplate[]>();
+    for (const t of filtered) {
+      const key = (t.dir && t.dir.trim()) || '通用策略';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(t);
+    }
+    return Array.from(map.entries());
+  }, [filtered]);
 
   const handleSelect = (template: StrategyTemplate) => {
     onSelect(template);
@@ -209,10 +221,18 @@ export const StrategyTemplateModal: React.FC<StrategyTemplateModalProps> = ({
               <p className="text-sm">该分类暂无模板</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {filtered.map((template) => {
-                const isSelected = template.id === currentTemplateId;
-                return (
+            <div className="space-y-5">
+              {grouped.map(([dirLabel, items]) => (
+                <div key={dirLabel}>
+                  <div className="flex items-center gap-1.5 mb-2 px-0.5">
+                    <Folder className="w-3.5 h-3.5 text-gray-400" />
+                    <span className="text-xs font-medium text-gray-500 truncate">{dirLabel}</span>
+                    <span className="text-xs text-gray-400">({items.length})</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {items.map((template) => {
+                      const isSelected = template.id === currentTemplateId;
+                      return (
                   <div
                     key={template.id}
                     onClick={() => handleSelect(template)}
@@ -280,6 +300,9 @@ export const StrategyTemplateModal: React.FC<StrategyTemplateModalProps> = ({
                   </div>
                 );
               })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

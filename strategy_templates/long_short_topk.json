@@ -52,5 +52,6 @@
   "live_defaults": {
     "rebalance_days": 3
   },
-  "live_config_tips": []
+  "live_config_tips": [],
+  "markets": []
 }
