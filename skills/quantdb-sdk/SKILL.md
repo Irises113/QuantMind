@@ -95,7 +95,7 @@ QuantDB 按 6 大类 28 个数据集组织，本地已全部落盘（2016-01 至
 ### 6 ML数据集（因子核心）
 | 数据集 | 内容 |
 |---|---|
-| `features_daily` | 日频特征（技术指标+估值合并，**52 列**） |
+| `features_daily` | 日频特征（技术指标+估值+交易属性合并，**78 列**，2026-09 起） |
 | `l1_factors` | **L1 因子（98 因子）**：动量/波动/流动性/技术/基本面/风格/行业/筹码/概念 |
 | `l2_factors` | **L2 因子（216 高频微观因子）**：VPIN/资金流/价差/深度/订单/竞价/跳跃/冲击 |
 | `l1_l2_factors` | L1+L2 合并 |
@@ -193,6 +193,18 @@ Qlib 二进制缓存（data/quantdb/.qlib_cache/cn_data）
 
 ### market_sentiment（市场情绪，19 列）
 `price_range, upper_shadow, lower_shadow, body_ratio, amount_per_trade, liquidity_score, intraday_vol, gap_up_down, buy_pressure, sell_pressure, momentum_1d/3d, am_pm_trend, volume_concentration`
+
+### features_daily（日频特征合并表，**78 列**，2026-09 起）
+= technical_indicators + valuation 的 46 个数值列（`close/ma*/rsi*/kdj*/macd*/vol_*/return_*/pct_change/beta_20/total_capital/circulating_capital/total_mv/float_mv/net_profit_ttm/revenue_ttm/equity/annual_net_profit/pe_ttm/pe_static/pb/ps_ttm/dividend_rate`）**↑ 新增 30 列**（全部以**字符串**存储，用前需转数值）：
+
+- **标记(0/1 字符串)**：`in_hs300, is_hsgt, is_margin, is_kcb_creatable, is_st, is_quit_risk, is_hk`
+- **分类**：`industry_code/industry_name`（128 细分行业）、`sector_code`、`region_area_code/region_area_name`（32 地区板块）、`main_business`（自由文本）、`list_date`（`YYYYMMDD` 字符串）
+- **市值/股本**：`total_cap_yi / float_mv_yi`（**亿元**，= `total_mv/float_mv`÷1e8）、`free_float_shares`（**万股**，自由流通股本）
+- **价格**：`ipo_price`、`zt_price`（涨停价，元）、`dt_price`（跌停价，元）——基于**不复权**价
+- **交易行为**：`hs_turnover`（换手率 %）、`seal_strength`（封板强度）、`zaf`（当日涨跌幅 %，≈`pct_change`）、`ever_zt_count`、`year_zt_days`
+- **估值/风险**：`beta_now`、`dyna_pe`（动态PE，含负哨兵）、`static_pe_ttm`、`div_yield`（股息率 **%**）、`pb_mrq`（市净率 MRQ）
+
+> 单位陷阱详见 [[quantdb-fields]]：`div_yield` 是 %（5.14=5.14%），与本表 `dividend_rate`（小数，÷100）差 100 倍；`total_cap_yi/float_mv_yi` 是亿元，与本表 `total_mv/float_mv`（元）差 1e8。
 
 ### l1_factors（98 因子）
 动量(22): `mom_ret_1d~120d, mom_ma_gap_5/10/20, mom_ema_gap_12/26, mom_macd_*, mom_rsi_*, mom_kdj_*`

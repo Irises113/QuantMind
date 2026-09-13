@@ -159,11 +159,31 @@ python backend/scripts/wind_l2_import.py --archive ... --force                  
 
 ## 六、6_ml_datasets 因子
 
-### features_daily（技术+估值合并表）
-| 字段 | 单位 | 注意 |
+### features_daily（技术+估值合并表，**78 列**，2026-09 起新增 30 列）
+基础 46 个数值列单位与 technical_indicators / valuation 一致；**新增 30 列全部以字符串存储**，用前先转数值：
+
+| 字段 | 单位 | 实测/注意 |
 |---|---|---|
 | `dividend_rate` | **小数口径（无 ×100）** | 与 valuation 不同！公式 = 每10股派息/不复权close（0.98/66.19=0.0148），**从未切换口径**。valuation 20260814 起是它的 10 倍。特征快照 generate_feature_snapshots.py 已 ×10 归一到百分数口径 |
 | `total_mv / float_mv / pe / pb 等` | 与 valuation 完全一致 | 实测 601138 全部 ✓ |
+| `total_cap_yi / float_mv_yi` | **亿元** | 实测 `×1e8/total_mv=1.000`、`×1e8/float_mv=1.000`（与本表 `total_mv/float_mv`（元）差 1e8） |
+| `free_float_shares` | **万股**（自由流通股本） | `×1e4` 转股；000001.SZ=816056.58 万股≈81.6 亿股（**自由流通 < 流通股本**，勿与 `circulating_capital` 混用） |
+| `hs_turnover` | **%**（换手率） | 如 0.43 / 1.71，max≈76 |
+| `zaf` | **%**（当日涨跌幅） | 与 `pct_change` 高度一致（corr=0.986，-0.93 vs -0.928） |
+| `seal_strength` | 无量纲（封板强度，≈1.0 封住） | 如 1.02 |
+| `ever_zt_count` / `year_zt_days` | 计数（整数） | 曾涨停次数 / 年内涨停天数 |
+| `ipo_price` | 元 | 发行价 |
+| `zt_price` / `dt_price` | **元（基于不复权价）** | 涨停价/跌停价；⚠️ 与表内**前复权** close 不同口径（勿直接比；000001.SZ: zt=13.04/dt=10.67 vs 前复权 close=18.16） |
+| `beta_now` | 无量纲（beta） | 与 `beta_20` corr≈0.71（窗口/口径不同） |
+| `dyna_pe` / `static_pe_ttm` | 倍 | ⚠️ 含负哨兵（实测 -686 / -897），亏损股勿直接用 |
+| `div_yield` | **%（百分数值）** | 5.14=5.14%；与本表 `dividend_rate`（小数 0.0508）**差 100 倍** |
+| `pb_mrq` | 倍 | ≈`pb`（`pb_mrq/pb` median=1.000） |
+| `list_date` | 字符串 `YYYYMMDD` | 如 '19910403' |
+| `industry_code / industry_name` | 字符串 | 128 细分行业（X5001 / 全国性银行） |
+| `sector_code` | 字符串 | 如 881386 |
+| `region_area_code / region_area_name` | 字符串 | 32 地区板块（18 / 深圳板块） |
+| `main_business` | 中文文本 | 主营业务 |
+| `in_hs300 / is_hsgt / is_margin / is_kcb_creatable / is_st / is_quit_risk / is_hk` | 字符串 `'0'/'1'` | 标记位（转 int 后再过滤/统计） |
 
 ### l1_factors（一级因子，decimal 为主）
 | 字段 | 单位 |
