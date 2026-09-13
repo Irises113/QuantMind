@@ -139,6 +139,12 @@ class FundamentalAligner:
             return instruments
 
         mask = pd.Series(True, index=snapshot.index)
+        # features_daily 2026-09 起新增列以字符串存储：数值比较前先转数值，
+        # 否则 `col <= 80` 之类的约束会静默失效（字符串比较恒为 False/异常）。
+        from backend.services.engine.data_platform.quantdb_hub import (
+            _NUMERIC_STRING_COLUMNS,
+        )
+
         for key, target_val in constraints.items():
             if target_val is None:
                 continue
@@ -154,6 +160,8 @@ class FundamentalAligner:
                 continue
 
             col_data = snapshot[col]
+            if op in ("le", "ge") or col in _NUMERIC_STRING_COLUMNS:
+                col_data = pd.to_numeric(col_data, errors="coerce")
             if op == "le":
                 mask &= col_data <= float(target_val)
             elif op == "ge":

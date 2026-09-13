@@ -115,6 +115,12 @@ FEATURES_FIELDS = [
     "rsi_14", "kdj_k", "kdj_d", "kdj_j", "macd_hist", "vol_atr_14", "beta_20",
     "pe_ttm", "pb", "ps_ttm", "dividend_rate", "total_mv", "float_mv",
     "net_profit_ttm", "revenue_ttm",
+    # 2026-09 宽表新增（字符串存储，load_fields 会转数值；未同步时自动跳过）
+    "hs_turnover", "seal_strength", "zaf", "beta_now",
+    "dyna_pe", "static_pe_ttm", "div_yield", "pb_mrq",
+    "ever_zt_count", "year_zt_days",
+    "total_cap_yi", "float_mv_yi", "free_float_shares",
+    "ipo_price", "zt_price", "dt_price",
 ]
 
 DATASET_SOURCES = {
@@ -208,19 +214,34 @@ def load_fields(
     if not list(ML_DIR.glob(f"{dataset}/dt=*")):
         log.warning("数据集无分区，跳过: %s", glob)
         return {}
-    cols = ", ".join(["symbol", "dt"] + [f'"{f}"' for f in fields])
-    q = f"SELECT {cols} FROM read_parquet('{glob}', hive_partitioning=true, union_by_name=true)"
-    conds = []
-    if start_year:
-        conds.append(f"CAST(dt AS VARCHAR) >= '{start_year}0101'")
-    if start is not None:
-        conds.append(f"CAST(dt AS VARCHAR) >= '{start.strftime('%Y%m%d')}'")
-    if end is not None:
-        conds.append(f"CAST(dt AS VARCHAR) <= '{end.strftime('%Y%m%d')}'")
-    if conds:
-        q += " WHERE " + " AND ".join(conds)
     con = duckdb.connect()
     try:
+        # 先探 schema：只请求实际存在的列，避免尚未同步的新字段（如 2026-09 新增）
+        # 导致整条 SELECT 因 BinderException 失败。
+        try:
+            schema = con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{glob}', hive_partitioning=true, union_by_name=true)"
+            ).fetchdf()
+            available = {str(c) for c in schema["column_name"]}
+        except Exception as exc:  # noqa: BLE001
+            log.warning("读取 %s schema 失败，按请求列尝试: %s", dataset, exc)
+            available = set(fields)
+        use_fields = [f for f in fields if f in available]
+        if not use_fields:
+            log.warning("%s 无可用请求列（可能尚未同步该字段）", dataset)
+            return {}
+
+        cols = ", ".join(["symbol", "dt"] + [f'"{f}"' for f in use_fields])
+        q = f"SELECT {cols} FROM read_parquet('{glob}', hive_partitioning=true, union_by_name=true)"
+        conds = []
+        if start_year:
+            conds.append(f"CAST(dt AS VARCHAR) >= '{start_year}0101'")
+        if start is not None:
+            conds.append(f"CAST(dt AS VARCHAR) >= '{start.strftime('%Y%m%d')}'")
+        if end is not None:
+            conds.append(f"CAST(dt AS VARCHAR) <= '{end.strftime('%Y%m%d')}'")
+        if conds:
+            q += " WHERE " + " AND ".join(conds)
         df = con.execute(q).fetchdf()
     finally:
         con.close()
@@ -234,11 +255,13 @@ def load_fields(
         df = df[df["symbol"].isin(syms)]
 
     out: dict[str, pd.DataFrame] = {}
-    for f in fields:
+    for f in use_fields:
         if f not in df.columns:
             continue
         wide = df.pivot_table(index="_dt", columns="symbol", values=f, aggfunc="last")
         wide = wide.sort_index()
+        # 新字段可能是字符串存储 → 先转数值（非法转 NaN），再统一 float32
+        wide = wide.apply(pd.to_numeric, errors="coerce")
         if wide.notna().to_numpy().any():
             out[f] = wide.astype("float32")
     return out

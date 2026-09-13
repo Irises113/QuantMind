@@ -89,6 +89,33 @@ _COLUMN_RENAMES: dict[str, str] = {
 # volinstock / vol_in_stock → volume，仅在 volume 列不存在时才重命名
 _VOLUME_ALIASES = {"volinstock", "vol_in_stock"}
 
+# features_daily 2026-09 起新增列：以字符串存储，需转数值后才能参与计算/过滤。
+# 仅对下列「数值语义」列做 pd.to_numeric，文本/分类列（industry_name/main_business/
+# industry_code 等）保持原样。
+_NUMERIC_STRING_COLUMNS: set[str] = {
+    # 标记位 0/1
+    "in_hs300", "is_hsgt", "is_margin", "is_kcb_creatable",
+    "is_st", "is_quit_risk", "is_hk",
+    # 市值 / 股本
+    "total_cap_yi", "float_mv_yi", "free_float_shares",
+    # 价格（元，zt/dt 为不复权口径）
+    "ipo_price", "zt_price", "dt_price",
+    # 交易行为
+    "hs_turnover", "seal_strength", "zaf", "ever_zt_count", "year_zt_days",
+    # 估值 / 风险
+    "beta_now", "dyna_pe", "static_pe_ttm", "div_yield", "pb_mrq",
+    # 分类编码（数值型）
+    "sector_code", "region_area_code",
+}
+
+
+def _coerce_numeric_strings(df: pd.DataFrame) -> pd.DataFrame:
+    """把已知「字符串数值列」转成数值（缺失/非法转 NaN），不改变文本列。"""
+    for col in _NUMERIC_STRING_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
 
 def _dt_conditions(start: date | None, end: date | None, col: str = "dt") -> list[str]:
     """生成 dt 列的过滤条件（dt 在 Hive partitioning 中为整数 YYYYMMDD）。"""
@@ -1049,7 +1076,7 @@ class QuantDBDataHub:
             )
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype(str)
-        return df
+        return _coerce_numeric_strings(df)
 
     # ------------------------------------------------------------------
     # 融资融券
@@ -1116,7 +1143,7 @@ class QuantDBDataHub:
         # 删除元数据列
         meta_cols = ["release_id", "published_at"]
         df = df.drop(columns=[c for c in meta_cols if c in df.columns], errors="ignore")
-        return df
+        return _coerce_numeric_strings(df)
 
     def _read_daily_kline_from_files(
         self,
