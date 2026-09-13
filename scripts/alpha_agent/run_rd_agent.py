@@ -175,7 +175,7 @@ try:
         sys.exit(1)
 
     # Compute IC：向量化日度 Spearman（秩的 Pearson），避免逐日 spearmanr 过慢
-    df_ic = pd.DataFrame({"f": f.values, "r": r.values})
+    df_ic = pd.DataFrame({{"f": f.values, "r": r.values}})
     df_ic["date"] = f.index.get_level_values(0)
     df_ic = df_ic[np.isfinite(df_ic["f"]) & np.isfinite(df_ic["r"])]
     if len(df_ic) < 100:
