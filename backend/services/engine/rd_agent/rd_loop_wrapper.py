@@ -751,7 +751,8 @@ class RDLoopWrapper:
             except Exception as e:
                 logger.debug("Failed to read %s: %s", pkl_path, e)
 
-        # 2. Factor code
+        # 2. Factor code —— 直接用 workspace.target_task.factor_name 映射，
+        #    不再依赖函数名与因子名一致（LLM 函数命名可能与因子名不同）。
         factor_code: dict[str, str] = {}
         for pkl_path in sorted(log_path.glob("**/coder result/**/*.pkl")):
             try:
@@ -767,10 +768,24 @@ class RDLoopWrapper:
                             if isinstance(v, str) and "def " in v:
                                 code = v
                                 break
-                    if code:
+                    if not code:
+                        continue
+                    name = ""
+                    target = getattr(ws, "target_task", None)
+                    if target is not None:
+                        name = str(
+                            getattr(target, "factor_name", None)
+                            or getattr(target, "name", None)
+                            or ""
+                        ).strip()
+                    if not name:
                         fn_match = re.search(r"def\s+(\w+)\s*\(", code)
-                        fname = fn_match.group(1) if fn_match else f"factor_{len(factor_code)}"
-                        factor_code[fname] = code
+                        name = (
+                            fn_match.group(1).removeprefix("calculate_")
+                            if fn_match
+                            else f"factor_{len(factor_code)}"
+                        )
+                    factor_code[name] = code
             except Exception as e:
                 logger.debug("Failed to read coder result %s: %s", pkl_path, e)
 
@@ -789,18 +804,12 @@ class RDLoopWrapper:
             except Exception as e:
                 logger.debug("Failed to read feedback %s: %s", pkl_path, e)
 
-        # 4. Merge — match factor_meta names to factor_code names
-        #    Code names may have "calculate_" prefix (e.g. calculate_MOM_10D vs MOM_10D)
-        code_by_base: dict[str, str] = {}
-        for fname, code in factor_code.items():
-            base = fname.removeprefix("calculate_")
-            code_by_base[base] = code
-
+        # 4. Merge —— 只保留**已完成 coding 阶段**的因子（有代码）。
+        #    半成品（如 loop_n 预算截断时第二轮只有 experiment generation、无 coder result）
+        #    不落库，避免因子库里出现无代码、无法回测的条目。
         factors: list[dict] = []
-        all_names = set(factor_meta.keys()) | set(code_by_base.keys())
-        for name in sorted(all_names):
+        for name, code in sorted(factor_code.items()):
             meta = factor_meta.get(name, {})
-            code = code_by_base.get(name, "")
             factors.append({
                 "name": meta.get("name", name),
                 "formulation": meta.get("formulation", ""),
@@ -810,6 +819,13 @@ class RDLoopWrapper:
                 "market": self.market,
                 "feedback": feedback_text[:5000] if feedback_text else "",
             })
+
+        missing = sorted(set(factor_meta.keys()) - set(factor_code.keys()))
+        if missing:
+            logger.info(
+                "[%s] %d factors generated without code (partial/incomplete loop), skipped: %s",
+                self.market, len(missing), missing,
+            )
 
         logger.info("[%s] Extracted %d factors", self.market, len(factors))
         return factors
