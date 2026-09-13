@@ -74,7 +74,7 @@ const AdminPage: React.FC = () => {
             icon: <SwapOutlined />, 
             label: '交易核心', 
             children: [
-                { key: 'orders', label: '订单管理（开发中）' },
+                { key: 'orders', label: '订单管理' },
                 { key: 'risk', label: '风险控制' },
             ]
         },

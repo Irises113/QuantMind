@@ -485,6 +485,40 @@ export interface RiskEventAdmin {
     created_at: string;
 }
 
+export interface AdminOrderHistoryItem {
+    id: string;
+    mode: string;
+    source: 'hosted' | 'risk' | string;
+    tenant_id: string;
+    user_id: string;
+    strategy_id?: string | null;
+    symbol: string;
+    side: string;
+    quantity: number;
+    price?: number | null;
+    average_price?: number | null;
+    status: string;
+    created_at?: string | null;
+    filled_at?: string | null;
+    remarks?: string | null;
+}
+
+export interface AdminPlannedOrderItem {
+    id: string;
+    kind: 'rebalance_job' | 'hosted_task' | 'schedule' | string;
+    mode: string;
+    tenant_id: string;
+    user_id: string;
+    strategy_id?: string | null;
+    phase?: string | null;
+    status: string;
+    trade_date?: string | null;
+    planned_at?: string | null;
+    window_end_at?: string | null;
+    title: string;
+    detail?: string | null;
+}
+
 export interface RiskDryRunItem {
     rule_id?: number | null;
     rule_name: string;

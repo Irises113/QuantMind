@@ -18,6 +18,8 @@ import {
     RiskRuleUpsertRequest,
     RiskEventAdmin,
     RiskDryRunItem,
+    AdminOrderHistoryItem,
+    AdminPlannedOrderItem,
 } from '../types';
 import { authService } from '../../auth/services/authService';
 import { SERVICE_ENDPOINTS, resolveWebSafeServiceBase } from '../../../config/services';
@@ -658,6 +660,22 @@ class AdminService {
         payload: { user_id: number; tenant_id?: string; market?: string },
     ): Promise<RiskDryRunItem[]> {
         const resp = await this.axiosInstance.post(`/admin/risk-rules/${ruleId}/dry-run`, payload);
+        return this.unwrap(resp.data);
+    }
+
+    async listAutoOrderHistory(params?: {
+        mode?: string;
+        source?: string;
+        user_id?: string;
+        symbol?: string;
+        limit?: number;
+    }): Promise<AdminOrderHistoryItem[]> {
+        const resp = await this.axiosInstance.get('/admin/orders/history', { params });
+        return this.unwrap(resp.data);
+    }
+
+    async listPlannedOrders(): Promise<AdminPlannedOrderItem[]> {
+        const resp = await this.axiosInstance.get('/admin/orders/planned');
         return this.unwrap(resp.data);
     }
 }
