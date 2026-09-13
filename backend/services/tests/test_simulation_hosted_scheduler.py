@@ -5,6 +5,7 @@ from backend.services.simulation.services.simulation_hosted_scheduler import (
     _next_scheduled_trigger,
     _normalize_live_trade_config,
     _should_trigger,
+    hosted_cycle_ready,
 )
 
 
@@ -197,3 +198,10 @@ def test_next_scheduled_trigger_skips_missed_window_and_returns_next_interval_da
     assert next_trigger.trade_date == "2026-06-08"
     assert next_trigger.target_at.isoformat() == "2026-06-08T09:30:00+08:00"
     assert next_trigger.window_end_at.isoformat() == "2026-06-08T09:31:30+08:00"
+
+
+def test_hosted_cycle_ready_skips_sell_only_window():
+    assert hosted_cycle_ready("SELL") is False
+    assert hosted_cycle_ready("BUY") is True
+    assert hosted_cycle_ready("ALL") is True
+

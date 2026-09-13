@@ -33,6 +33,7 @@ import pandas as pd
 from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
 from backend.services.simulation.services.market_rules import (
     Market,
+    lot_size_for_symbol,
     normalize_market,
 )
 from backend.shared.stock_utils import StockCodeUtil
@@ -407,6 +408,7 @@ class LocalMarketData:
                 limit_down=limit_down,
                 is_st=is_st,
                 suspended=volume <= 0,
+                lot_size=lot_size_for_symbol(symbol),
             )
         return bars
 

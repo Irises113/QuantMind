@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from backend.services.simulation.services.local_market_data import DailyBar
+from backend.services.simulation.services.market_rules import lot_size_for_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +115,9 @@ def match_order(
             )
 
     # ── 整手 ──
+    lot_size = max(1, int(lot_size_for_symbol(bar.symbol) or cfg.lot_size or _LOT_SIZE))
     if side == "buy":
-        fill_qty = _floor_to_lot(quantity, cfg.lot_size)
+        fill_qty = _floor_to_lot(quantity, lot_size)
         if fill_qty <= 0:
             return MatchResult(success=False, reason="BELOW_LOT_SIZE")
     else:

@@ -509,6 +509,7 @@ def test_should_request_cancel_for_buy_status():
 
 def test_resolve_board_lot_size_matches_risk_rule():
     assert _resolve_board_lot_size("688217.SH") == 200
+    assert _resolve_board_lot_size("SH688217") == 200
     assert _resolve_board_lot_size("300001.SZ") == 100
     assert _resolve_board_lot_size("000001.SZ") == 100
 

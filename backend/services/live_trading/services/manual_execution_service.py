@@ -411,22 +411,9 @@ def _floor_board_lot(quantity: float, lot_size: int = 100) -> int:
 
 
 def _resolve_board_lot_size(symbol: str) -> int:
-    s = str(symbol or "").strip().upper()
-    code = s.split(".", 1)[0]
-    if code.startswith("SH") and len(code) > 2:
-        code = code[2:]
-    elif code.startswith("SZ") and len(code) > 2:
-        code = code[2:]
-    elif code.startswith("BJ") and len(code) > 2:
-        code = code[2:]
+    from backend.services.simulation.services.market_rules import lot_size_for_symbol
 
-    if code.startswith("688"):
-        return max(1, int(getattr(settings, "MIN_LOT_STAR_BOARD", 200)))
-    if code.startswith("30"):
-        return max(1, int(getattr(settings, "MIN_LOT_GEM_BOARD", 100)))
-    if s.endswith(".BJ") or code.startswith(("8", "9")):
-        return max(1, int(getattr(settings, "MIN_LOT_BJ_BOARD", 100)))
-    return max(1, int(getattr(settings, "MIN_LOT_MAIN_BOARD", 100)))
+    return max(1, int(lot_size_for_symbol(symbol)))
 
 
 def _build_preview_hash(payload: dict[str, Any]) -> str:

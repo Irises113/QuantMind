@@ -37,15 +37,19 @@ class RiskService:
 
     @staticmethod
     def _resolve_board_min_lot(symbol: str) -> tuple[str, int]:
-        s = str(symbol or "").strip().upper()
-        code = s.split(".", 1)[0]
-        if code.startswith("688"):
-            return "STAR", max(1, int(getattr(settings, "MIN_LOT_STAR_BOARD", 200)))
+        from backend.services.simulation.services.market_rules import lot_size_for_symbol
+        from backend.shared.stock_utils import StockCodeUtil
+
+        lot = max(1, int(lot_size_for_symbol(symbol)))
+        suffix = StockCodeUtil.to_suffix(str(symbol or ""))
+        code = suffix.split(".", 1)[0] if suffix else ""
+        if code.startswith(("688", "689")):
+            return "STAR", lot
         if code.startswith("30"):
-            return "GEM", max(1, int(getattr(settings, "MIN_LOT_GEM_BOARD", 100)))
-        if s.endswith(".BJ") or code.startswith(("8", "9")):
-            return "BJ", max(1, int(getattr(settings, "MIN_LOT_BJ_BOARD", 100)))
-        return "MAIN", max(1, int(getattr(settings, "MIN_LOT_MAIN_BOARD", 100)))
+            return "GEM", lot
+        if suffix.endswith(".BJ") or code.startswith(("4", "8")):
+            return "BJ", lot
+        return "MAIN", lot
 
     async def _load_trade_account_snapshot(self, tenant_id: str, user_id: int) -> dict[str, Any]:
         try:

@@ -17,6 +17,9 @@ from .real_trading_utils import (
 from backend.services.live_trading.services.manual_execution_service import (
     manual_execution_service,
 )
+from backend.services.simulation.services.simulation_hosted_scheduler import (
+    run_simulation_cycle_for_active,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -418,9 +421,6 @@ async def start_trading(
         if mode == "SIMULATION" and trading_permission != "blocked":
             if os.getenv("SIM_BOOTSTRAP_FIRST_RUN_ENABLED", "true").strip().lower() == "true":
                 try:
-                    from datetime import datetime, timezone
-
-                    now_iso = datetime.now(timezone.utc).isoformat()
                     bootstrap_lock_key = (
                         f"qm:hosted:simulation:bootstrap:{resolved_tenant_id}:{resolved_user_id}:{strategy_id or strategy_name}"
                     )
@@ -431,29 +431,22 @@ async def start_trading(
                     except Exception:
                         acquired = True  # Redis 异常不阻断，仍尝试建单（靠 task_id 去重兜底）
                     if acquired:
-                        bootstrap_result = await manual_execution_service.create_hosted_task(
+                        bootstrap_result = await run_simulation_cycle_for_active(
                             tenant_id=resolved_tenant_id,
                             user_id=resolved_user_id,
                             strategy_id=strategy_id or strategy_name,
-                            trading_mode="SIMULATION",
-                            execution_config=exec_config,
                             live_trade_config=live_config,
-                            trigger_context={
-                                "source": "bootstrap_first_run",
-                                "runner_trade_date": datetime.now(timezone.utc).date().isoformat(),
-                                "triggered_at": now_iso,
-                                "started_at": now_iso,
-                                "runner_mode": "SIMULATION",
-                                "note": "first_run_unlimited_time_latest_price",
-                            },
-                            parent_runtime_id=run_id,
-                            note="bootstrap: first run unlimited time, latest price, real inference",
-                            task_id=bootstrap_task_id,
+                            run_id=bootstrap_task_id,
                         )
+                        if bootstrap_result.get("status") == "failed":
+                            bootstrap_skipped_reason = str(
+                                bootstrap_result.get("error") or "simulation cycle failed"
+                            )[:300]
                         logger.info(
-                            "[SimBootstrap] 首次启动即时任务已创建 tenant=%s user=%s strategy=%s task=%s status=%s",
+                            "[SimBootstrap] 首次启动已走 SimulationEngine tenant=%s user=%s strategy=%s task=%s status=%s filled=%s",
                             resolved_tenant_id, resolved_user_id, strategy_id or strategy_name,
                             bootstrap_task_id, (bootstrap_result or {}).get("status"),
+                            (bootstrap_result or {}).get("filled_count"),
                         )
                     else:
                         bootstrap_skipped_reason = "bootstrap_lock_exists"

@@ -132,6 +132,24 @@ def test_buy_below_lot_rejected():
 
 
 @pytest.mark.unit
+def test_star_board_buy_floored_to_200():
+    bar = _bar()
+    bar.symbol = "688001.SH"
+    r = match_order("buy", 350, bar, _CFG)
+    assert r.success
+    assert r.fill_quantity == 200
+
+
+@pytest.mark.unit
+def test_star_board_buy_below_200_rejected():
+    bar = _bar()
+    bar.symbol = "SH688001"
+    r = match_order("buy", 100, bar, _CFG)
+    assert not r.success
+    assert r.reason == "BELOW_LOT_SIZE"
+
+
+@pytest.mark.unit
 def test_sell_allows_odd_lot():
     """卖出允许清仓零头（不满一手也可以卖完）。"""
     bar = _bar()

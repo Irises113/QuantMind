@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from backend.services.simulation.services.signal_loader import SignalScore
+from backend.services.simulation.services.market_rules import lot_size_for_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -302,10 +303,8 @@ class RebalanceCalculator:
                 quote = quotes.get(s.symbol)
                 if not quote or quote.current_price <= 0:
                     continue
-                qty = (
-                    int(per_value / quote.current_price // strategy.lot_size)
-                    * strategy.lot_size
-                )
+                lot = self._lot_for(s.symbol, strategy)
+                qty = int(per_value / quote.current_price // lot) * lot
                 if qty > 0:
                     target[s.symbol] = qty
         return target
@@ -431,7 +430,9 @@ class RebalanceCalculator:
 
             # 计算目标股数（向下取整到整手）
             raw_quantity = target_value / quote.current_price
-            lot_quantity = self._floor_to_lot(raw_quantity, strategy.lot_size)
+            lot_quantity = self._floor_to_lot(
+                raw_quantity, self._lot_for(sig.symbol, strategy)
+            )
 
             if lot_quantity > 0:
                 target_positions[sig.symbol] = lot_quantity
@@ -473,6 +474,11 @@ class RebalanceCalculator:
             for sym in free:
                 out[sym] += share
         return out
+
+    @staticmethod
+    def _lot_for(symbol: str, strategy: StrategyConfig) -> int:
+        """CN 按板块手数（科创板 200），其它市场用策略默认 lot_size。"""
+        return max(1, int(lot_size_for_symbol(symbol) or strategy.lot_size or 100))
 
     def _floor_to_lot(self, quantity: float, lot_size: int = 100) -> int:
         """向下取整到整手"""

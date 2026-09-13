@@ -2,8 +2,9 @@
 
 每个市场的交易规则差异集中在这里表达：
 - 回转交易：CN T+1（当日买入锁到次日），其余 T+0
-- 最小交易单位：CN 100 股整手；HK 按每手股数（board lot，缺省 1 表示
-  按标的元数据，未接入时退化为 1 股）；US/期货/加密 1
+- 最小交易单位：CN 主板/创业板/北交所 100 股，科创板（688/689）200 股；
+  HK 按每手股数（board lot，缺省 1 表示按标的元数据，未接入时退化为 1 股）；
+  US/期货/加密 1
 - 涨跌停：仅 CN 有（±10%/创业板科创板 ±20%/北交所 ±30%，见 local_market_data）
 - 费用：比例佣金 + 最低佣金 + 印花税（CN 卖出 0.05%、HK 双边 0.1% 均以
   seller 单边口径简化）
@@ -19,9 +20,12 @@ symbol → 市场推断规则（infer_market）：
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
+
+from backend.shared.stock_utils import StockCodeUtil
 
 
 class Market(str, Enum):
@@ -58,7 +62,8 @@ class MarketTradingRules:
     currency: str
     # 买入是否锁定至次日可卖（T+1）
     t_plus_1: bool
-    # 最小买入单位（股/张/枚）。CN=100 整手；其余市场 1。
+    # 最小买入单位（股/张/枚）。CN 市场默认 100，科创板见 lot_size_for_symbol；
+    # 其余市场 1。
     lot_size: int
     # 比例佣金（双向）
     commission_rate: float
@@ -184,6 +189,33 @@ def infer_market(symbol: str) -> Market:
     if _US_TICKER_RE.fullmatch(text):
         return Market.US
     return Market.CN
+
+
+def _cn_numeric_code(symbol: str) -> str:
+    """取出 A 股 6 位数字代码（兼容 SH688001 / 688001.SH / 688001）。"""
+    suffix = StockCodeUtil.to_suffix(str(symbol or "").strip())
+    code = suffix.split(".", 1)[0] if suffix else ""
+    if len(code) == 6 and code.isdigit():
+        return code
+    raw = str(symbol or "").upper().strip()
+    for pfx in ("SH", "SZ", "BJ"):
+        if raw.startswith(pfx):
+            raw = raw[len(pfx) :]
+            break
+    raw = raw.split(".", 1)[0]
+    return raw if len(raw) == 6 and raw.isdigit() else ""
+
+
+def lot_size_for_symbol(symbol: str, market: Market | str | None = None) -> int:
+    """按标的返回买入整手。科创板 688/689 为 200，其余 A 股 100。"""
+    inferred = infer_market(symbol) if market is None else normalize_market(market)
+    if inferred is not Market.CN:
+        return max(1, int(RULES_BY_MARKET[inferred].lot_size))
+
+    code = _cn_numeric_code(symbol)
+    if code.startswith(("688", "689")):
+        return max(1, int(os.getenv("MIN_LOT_STAR_BOARD", "200")))
+    return max(1, int(os.getenv("MIN_LOT_MAIN_BOARD", "100")))
 
 
 def infer_market_from_symbols(symbols: list[str]) -> Market:

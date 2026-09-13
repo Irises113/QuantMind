@@ -19,9 +19,6 @@ except ImportError:  # pragma: no cover - optional in local/unit test env
     get_calendar = None
 
 from backend.services.trade_shared.redis_client import RedisClient
-from backend.services.live_trading.services.manual_execution_service import (
-    manual_execution_service,
-)
 from backend.services.simulation.services.rebalance_job_service import (
     SimulationRebalanceJobService,
 )
@@ -93,6 +90,49 @@ def _normalize_live_trade_config(value: Any) -> dict[str, Any]:
         30, _to_int(merged.get("trigger_window_seconds"), 90)
     )
     return merged
+
+
+def hosted_cycle_ready(phase: str) -> bool:
+    """卖/买分窗时只在 BUY/ALL 跑一整轮：SimulationEngine 是先卖后买原子调仓。"""
+    return str(phase or "").upper() in {"BUY", "ALL"}
+
+
+def report_to_hosted_result(report: Any) -> dict[str, Any]:
+    return {
+        "task_id": getattr(report, "run_id", None),
+        "status": "failed" if getattr(report, "error", None) else "succeeded",
+        "error": getattr(report, "error", None),
+        "signal_count": getattr(report, "signal_count", 0),
+        "order_count": getattr(report, "order_count", 0),
+        "filled_count": getattr(report, "filled_count", 0),
+        "rejected_count": getattr(report, "rejected_count", 0),
+    }
+
+
+async def run_simulation_cycle_for_active(
+    *,
+    tenant_id: str,
+    user_id: str,
+    strategy_id: str,
+    live_trade_config: dict[str, Any] | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """托管模拟盘唯一执行入口：RebalanceCalculator + ashare_matcher。"""
+    from backend.services.simulation.engine import simulation_engine
+
+    cfg = _normalize_live_trade_config(live_trade_config)
+    params_override: dict[str, Any] = {}
+    if cfg.get("pool_id"):
+        params_override["pool_id"] = cfg["pool_id"]
+    report = await simulation_engine.run_cycle(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        strategy_id=strategy_id,
+        run_id=run_id,
+        params_override=params_override or None,
+        pool_id=cfg.get("pool_id"),
+    )
+    return report_to_hosted_result(report)
 
 
 def _parse_started_at(value: Any) -> date | None:
@@ -476,12 +516,6 @@ class SimulationHostedScheduler:
         live_trade_config = _normalize_live_trade_config(
             active_data.get("live_trade_config")
         )
-        execution_config = (
-            dict(active_data.get("execution_config"))
-            if isinstance(active_data.get("execution_config"), dict)
-            else {}
-        )
-        execution_config["trading_mode"] = "SIMULATION"
         started_day = _parse_started_at(active_data.get("started_at"))
         decision = _should_trigger(
             now=now,
@@ -489,6 +523,15 @@ class SimulationHostedScheduler:
             started_day=started_day,
         )
         if not decision.should_trigger:
+            return False
+        if not hosted_cycle_ready(decision.phase):
+            logger.info(
+                "simulation hosted skip SELL-only window tenant=%s user=%s strategy=%s "
+                "(engine runs sell+buy atomically on BUY/ALL)",
+                tenant_id,
+                user_id,
+                strategy_id,
+            )
             return False
 
         lock_key = _lock_key(
@@ -535,34 +578,26 @@ class SimulationHostedScheduler:
 
         try:
             await SimulationRebalanceJobService.mark_started(task_id)
-            result = await manual_execution_service.create_hosted_task(
+            result = await run_simulation_cycle_for_active(
                 tenant_id=tenant_id,
                 user_id=user_id,
                 strategy_id=strategy_id,
-                trading_mode="SIMULATION",
-                execution_config=execution_config,
                 live_trade_config=live_trade_config,
-                trigger_context={
-                    "source": "simulation_hosted_scheduler",
-                    "schedule_type": live_trade_config.get("schedule_type"),
-                    "phase": decision.phase,
-                    "triggered_at": now.astimezone(_SH_TZ).isoformat(),
-                    "runner_trade_date": decision.trade_date,
-                    "runner_mode": "SIMULATION",
-                    "started_at": active_data.get("started_at"),
-                },
-                parent_runtime_id=str(active_data.get("run_id") or "").strip() or None,
-                note="auto schedule from simulation hosted scheduler",
-                task_id=task_id,
+                run_id=task_id,
             )
+            if result.get("status") == "failed" and result.get("error"):
+                err = str(result["error"])
+                if err not in {"无可用信号", "账户不存在"}:
+                    raise RuntimeError(err)
             logger.info(
-                "simulation hosted task scheduled: tenant=%s user=%s strategy=%s phase=%s task=%s status=%s",
+                "simulation hosted cycle finished: tenant=%s user=%s strategy=%s phase=%s task=%s status=%s filled=%s",
                 tenant_id,
                 user_id,
                 strategy_id,
                 decision.phase,
                 task_id,
-                result.get("status") if isinstance(result, dict) else None,
+                result.get("status"),
+                result.get("filled_count"),
             )
             await SimulationRebalanceJobService.mark_finished(
                 task_id,

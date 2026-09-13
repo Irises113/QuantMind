@@ -33,6 +33,17 @@ def test_infer_market_from_symbols():
     assert infer_market_from_symbols([]) is Market.CN
 
 
+def test_lot_size_for_symbol_star_board_200():
+    from backend.services.simulation.services.market_rules import lot_size_for_symbol
+
+    assert lot_size_for_symbol("688001.SH") == 200
+    assert lot_size_for_symbol("SH688217") == 200
+    assert lot_size_for_symbol("689009.SH") == 200
+    assert lot_size_for_symbol("600036.SH") == 100
+    assert lot_size_for_symbol("300001.SZ") == 100
+    assert lot_size_for_symbol("AAPL") == 1
+
+
 def test_trading_rules_per_market():
     cn = rules_for("CN")
     assert cn.t_plus_1 and cn.lot_size == 100 and cn.has_price_limit

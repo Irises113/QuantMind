@@ -458,6 +458,101 @@ class SimulationExecutionEngine:
         # 避免以虚假价格成交污染模拟盘资产/持仓。
         return MarketSnapshot(price=0.0, price_source="unavailable")
 
+    async def execute_from_bar(
+        self,
+        order: SimOrder,
+        bar: Any,
+        market: str | None = None,
+    ) -> ExecutionResult:
+        """按当日不复权日 K 走 ashare_matcher（托管/周期调仓与回放同口径）。"""
+        from backend.services.simulation.services.ashare_matcher import (
+            MatchConfig,
+            match_order,
+        )
+        from backend.services.simulation.services.market_rules import (
+            infer_market,
+            lot_size_for_symbol,
+            rules_for,
+        )
+
+        rules = rules_for(market or infer_market(order.symbol))
+        market_str = rules.market.value
+        account_snapshot = await self.manager.get_account(
+            order.user_id, tenant_id=order.tenant_id, market=market_str
+        )
+        side = str(order.side.value).lower()
+        available_volume = None
+        if side == "sell" and isinstance(account_snapshot, dict):
+            positions = account_snapshot.get("positions") or {}
+            pos = positions.get(order.symbol)
+            if pos is None:
+                from backend.shared.stock_utils import StockCodeUtil
+
+                pos = positions.get(StockCodeUtil.to_suffix(order.symbol)) or positions.get(
+                    StockCodeUtil.to_prefix(order.symbol)
+                )
+            if isinstance(pos, dict):
+                avail = pos.get("available_volume")
+                available_volume = (
+                    float(pos.get("volume", 0) or 0)
+                    if avail is None
+                    else float(avail)
+                )
+
+        cfg = MatchConfig(
+            price_mode="close",
+            slippage_bps=float(settings.SIMULATION_SLIPPAGE_BPS),
+            commission_rate=float(settings.SIMULATION_COMMISSION_RATE),
+            commission_min=float(settings.SIMULATION_COMMISSION_MIN),
+            stamp_duty_rate=float(settings.SIMULATION_STAMP_DUTY_RATE),
+            lot_size=lot_size_for_symbol(order.symbol, rules.market),
+        )
+        mr = match_order(
+            side=side,
+            quantity=int(order.quantity or 0),
+            bar=bar,
+            cfg=cfg,
+            available_volume=available_volume,
+        )
+        if not mr.success:
+            return ExecutionResult(success=False, message=mr.reason)
+
+        gross = mr.fill_quantity * mr.fill_price
+        if side == "buy":
+            delta_cash = -(gross + mr.total_fee)
+            delta_volume = mr.fill_quantity
+        else:
+            delta_cash = gross - mr.total_fee
+            delta_volume = -mr.fill_quantity
+
+        update = await self.manager.update_balance(
+            user_id=order.user_id,
+            symbol=order.symbol,
+            delta_cash=delta_cash,
+            delta_volume=delta_volume,
+            price=mr.fill_price,
+            tenant_id=order.tenant_id,
+            market=rules.market.value,
+            t_plus_1=rules.t_plus_1,
+        )
+        if not update.get("success"):
+            reason = update.get("reason", "BALANCE_UPDATE_FAILED")
+            return ExecutionResult(
+                success=False, message=f"Balance update failed: {reason}"
+            )
+
+        return ExecutionResult(
+            success=True,
+            price=mr.fill_price,
+            quantity=mr.fill_quantity,
+            commission=mr.commission,
+            stamp_duty=mr.stamp_duty,
+            transfer_fee=mr.transfer_fee,
+            market=market_str,
+            account_snapshot=account_snapshot,
+            price_source=f"local_{cfg.price_mode}",
+        )
+
     async def execute_order(
         self, order: SimOrder, market: str | None = None
     ) -> ExecutionResult:
@@ -530,14 +625,19 @@ class SimulationExecutionEngine:
 
         # A股买入整手校验（卖出允许零碎以便清仓/强平）
         if rules.market.value == "CN" and side == "buy":
+            from backend.services.simulation.services.market_rules import (
+                lot_size_for_symbol,
+            )
+
+            lot_size = int(lot_size_for_symbol(order.symbol, rules.market))
             qty = float(order.quantity or 0)
             if (
                 abs(qty - round(qty)) > 1e-6
-                or int(round(qty)) % int(rules.lot_size or 100) != 0
+                or int(round(qty)) % lot_size != 0
             ):
                 return ExecutionResult(
                     success=False,
-                    message=f"CN买入须为{int(rules.lot_size or 100)}股整手，当前{order.quantity}",
+                    message=f"CN买入须为{lot_size}股整手，当前{order.quantity}",
                 )
 
         if order.order_type == OrderType.MARKET:
