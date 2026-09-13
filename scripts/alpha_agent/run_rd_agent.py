@@ -157,6 +157,20 @@ try:
     factor_values.index.names = ['datetime', 'instrument']
     returns.index.names = ['datetime', 'instrument']
 
+    # 统一 instrument 大小写：因子代码可能假设大写（SH600036），而 daily_pv.h5 用小写
+    # （sh600036），不统一会导致对齐交集为空、IC 无法计算。
+    def _upper_instrument(_s):
+        _names = list(_s.index.names)
+        if 'instrument' in _names:
+            _lvl = _names.index('instrument')
+            _lvs = _s.index.levels[_lvl]
+            if _lvs.dtype == object:
+                _s.index = _s.index.set_levels(_lvs.str.upper(), level=_lvl)
+        return _s
+
+    factor_values = _upper_instrument(factor_values)
+    returns = _upper_instrument(returns)
+
     common_idx = factor_values.index.intersection(returns.index)
     if len(common_idx) < 100:
         print("INSUFFICIENT_DATA")
