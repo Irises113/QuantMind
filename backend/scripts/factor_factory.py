@@ -190,6 +190,8 @@ def load_fields(
     fields: list[str],
     *,
     start_year: int | None = None,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
     max_symbols: int | None = None,
 ) -> dict[str, pd.DataFrame]:
     """读取 6_ml_datasets/<dataset> 指定列 → {field: 宽表(index=time, cols=symbol)}。"""
@@ -199,8 +201,15 @@ def load_fields(
         return {}
     cols = ", ".join(["symbol", "dt"] + [f'"{f}"' for f in fields])
     q = f"SELECT {cols} FROM read_parquet('{glob}', hive_partitioning=true, union_by_name=true)"
+    conds = []
     if start_year:
-        q += f" WHERE CAST(dt AS VARCHAR) >= '{start_year}0101'"
+        conds.append(f"CAST(dt AS VARCHAR) >= '{start_year}0101'")
+    if start is not None:
+        conds.append(f"CAST(dt AS VARCHAR) >= '{start.strftime('%Y%m%d')}'")
+    if end is not None:
+        conds.append(f"CAST(dt AS VARCHAR) <= '{end.strftime('%Y%m%d')}'")
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
     con = duckdb.connect()
     try:
         df = con.execute(q).fetchdf()
@@ -226,15 +235,26 @@ def load_fields(
     return out
 
 
-def load_close(*, start_year: int | None = None, max_symbols: int | None = None) -> pd.DataFrame:
+def load_close(
+    *,
+    start_year: int | None = None,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+    max_symbols: int | None = None,
+) -> pd.DataFrame:
     """daily_forward 收盘价宽表（用于前瞻收益 / IC）。"""
     return load_ohlcv(
-        ["close"], start_year=start_year, max_symbols=max_symbols
+        ["close"], start_year=start_year, start=start, end=end, max_symbols=max_symbols
     )["close"]
 
 
 def load_ohlcv(
-    cols: list[str], *, start_year: int | None = None, max_symbols: int | None = None
+    cols: list[str],
+    *,
+    start_year: int | None = None,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+    max_symbols: int | None = None,
 ) -> dict[str, pd.DataFrame]:
     """daily_forward 行情宽表 {col: index=time, cols=symbol}。
 
@@ -244,8 +264,15 @@ def load_ohlcv(
     glob = str(QUANTDB_ROOT / "1_kline_data" / "daily_forward" / "dt=*" / "data.parquet")
     sel = ", ".join(["symbol", "time"] + [f'"{c}"' for c in cols])
     q = f"SELECT {sel} FROM read_parquet('{glob}', hive_partitioning=true)"
+    conds = []
     if start_year:
-        q += f" WHERE year(time) >= {start_year}"
+        conds.append(f"year(time) >= {start_year}")
+    if start is not None:
+        conds.append(f"time >= TIMESTAMP '{start.strftime('%Y-%m-%d')}'")
+    if end is not None:
+        conds.append(f"time <= TIMESTAMP '{end.strftime('%Y-%m-%d')}'")
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
     con = duckdb.connect()
     try:
         df = con.execute(q).fetchdf()
@@ -291,7 +318,7 @@ def generate_factors(
             fn, expr = CS_OP_BY_NAME[op]
             name = _feature_name(op, field, None)
             try:
-                out[name] = (fn(x), expr(field), field)
+                out[name] = (fn(x).astype(np.float32), expr(field), field)
             except Exception as exc:  # noqa: BLE001
                 log.debug("op %s on %s failed: %s", op, field, exc)
         # 窗口算子
@@ -302,7 +329,7 @@ def generate_factors(
             for w in windows:
                 name = _feature_name(op, field, w)
                 try:
-                    out[name] = (fn(x, w), expr(field, w), field)
+                    out[name] = (fn(x, w).astype(np.float32), expr(field, w), field)
                 except Exception as exc:  # noqa: BLE001
                     log.debug("op %s(w=%d) on %s failed: %s", op, w, field, exc)
         if max_factors and len(out) >= max_factors:
@@ -501,29 +528,53 @@ def _select_fields(smoke: bool, limit: int | None) -> list[tuple[str, str]]:
     return pairs
 
 
+def _slice(df: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timestamp | None) -> pd.DataFrame:
+    if start is None and end is None:
+        return df
+    idx = df.index
+    mask = np.ones(len(idx), dtype=bool)
+    if start is not None:
+        mask &= idx >= start
+    if end is not None:
+        mask &= idx <= end
+    return df.loc[mask]
+
+
 def run(args: argparse.Namespace) -> None:
     t0 = time.time()
     windows = [int(w) for w in str(args.windows).split(",") if w.strip()]
     ops = [o.strip() for o in str(args.ops).split(",") if o.strip()]
     cs_ops = [o.strip() for o in str(args.cs_ops).split(",") if o.strip()]
     pairs = _select_fields(args.smoke, args.limit_fields)
-    log.info("mode=%s fields=%d windows=%s ops=%s cs_ops=%s",
-             "SMOKE" if args.smoke else "FULL", len(pairs), windows, ops, cs_ops)
 
-    # 1) 加载基字段
+    start_ts = pd.Timestamp(args.start_date) if args.start_date else None
+    end_ts = pd.Timestamp(args.end_date) if args.end_date else None
+    warmup = (max(windows) + 10) if windows else 70
+    load_start = (start_ts - pd.Timedelta(days=warmup)) if start_ts is not None else None
+    log.info("mode=%s fields=%d windows=%s ops=%s cs_ops=%s range=%s~%s warmup=%dd",
+             "SMOKE" if args.smoke else "FULL", len(pairs), windows, ops, cs_ops,
+             start_ts.date() if start_ts is not None else "-",
+             end_ts.date() if end_ts is not None else "-", warmup)
+
+    # 1) 加载基字段（含 warmup，保证窗口算子前段有效）
     by_dataset: dict[str, list[str]] = {}
     for ds, f in pairs:
         by_dataset.setdefault(ds, []).append(f)
     base: dict[str, pd.DataFrame] = {}
     for ds, fs in by_dataset.items():
-        base.update(load_fields(ds, fs, start_year=args.start_year, max_symbols=args.max_symbols))
+        base.update(load_fields(
+            ds, fs, start_year=args.start_year, start=load_start, end=end_ts,
+            max_symbols=args.max_symbols,
+        ))
     log.info("loaded %d base fields (%.0fs)", len(base), time.time() - t0)
 
-    close = load_close(start_year=args.start_year, max_symbols=args.max_symbols)
+    close = load_close(
+        start_year=args.start_year, start=load_start, end=end_ts, max_symbols=args.max_symbols
+    )
     # 对齐：仅保留基字段与 close 共有的日期
     base = {k: v.reindex(index=close.index).reindex(columns=close.columns) for k, v in base.items()}
 
-    # 2) 生成候选因子
+    # 2) 生成候选因子（含 warmup 后切片到目标窗口）
     fields = [f for _, f in pairs if f in base]
     factors = generate_factors(
         base, fields, windows=windows, ops=ops, cs_ops=cs_ops, max_factors=args.max_candidates
@@ -531,16 +582,18 @@ def run(args: argparse.Namespace) -> None:
     if not factors:
         log.warning("no factors generated; abort")
         return
+    factors = {n: (_slice(v, start_ts, end_ts), e, f) for n, (v, e, f) in factors.items()}
+    close_win = _slice(close, start_ts, end_ts)
 
-    # 3) 筛选
+    # 3) 筛选（screen_days 超过窗口时自然用满窗口）
     screened = screen_factors(
-        factors, close, horizon=args.horizon,
+        factors, close_win, horizon=args.horizon,
         screen_days=args.screen_days, min_coverage=args.min_coverage,
     )
 
     # 4) 去重
     kept = dedup_by_correlation(
-        factors, screened, close,
+        factors, screened, close_win,
         top_n=args.top_n, corr_threshold=args.corr_threshold, screen_days=args.screen_days,
     )
     kept = kept.sort_values("abs_ic", ascending=False)
@@ -548,6 +601,7 @@ def run(args: argparse.Namespace) -> None:
     log.info("final kept: %d", len(kept_names))
 
     out_root = Path(args.out) if args.out else (CUSTOM_ROOT / "6_ml_datasets" / "l1_factors")
+    start_dt = args.start_dt or (start_ts.strftime("%Y%m%d") if start_ts is not None else "20160101")
 
     if args.dry_run:
         log.info("dry-run: skip partition write")
@@ -555,11 +609,11 @@ def run(args: argparse.Namespace) -> None:
         out_root.mkdir(parents=True, exist_ok=True)
         ohlcv = load_ohlcv(
             ["open", "high", "low", "close", "volume", "amount"],
-            start_year=args.start_year, max_symbols=args.max_symbols,
+            start_year=args.start_year, start=load_start, end=end_ts, max_symbols=args.max_symbols,
         )
         n = write_factor_partitions(
             factors, kept_names, out_root=out_root,
-            start_dt=args.start_dt, rebuild=args.rebuild, ohlcv=ohlcv,
+            start_dt=start_dt, rebuild=args.rebuild, ohlcv=ohlcv,
         )
         log.info("partitions: %d", n)
         kept.to_csv(out_root / "MANIFEST.csv", index=False, encoding="utf-8")
@@ -582,12 +636,14 @@ def main() -> None:
     ap.add_argument("--smoke", action="store_true", help="冒烟: 小字段集 × 小窗口")
     ap.add_argument("--max-symbols", type=int, default=None)
     ap.add_argument("--start-year", type=int, default=None)
+    ap.add_argument("--start-date", default=None, help="目标窗口起始 YYYY-MM-DD")
+    ap.add_argument("--end-date", default=None, help="目标窗口结束 YYYY-MM-DD")
     ap.add_argument("--limit-fields", type=int, default=None)
     ap.add_argument("--windows", default="5,10,20,60")
     ap.add_argument("--ops", default="tsrank,tsstd,roc,zscore,delta,decay,slope")
     ap.add_argument("--cs-ops", default="csrank,cszscore")
     ap.add_argument("--max-candidates", type=int, default=None, help="生成上限（调试用）")
-    ap.add_argument("--top-n", type=int, default=500, help="IC 去重后保留因子数")
+    ap.add_argument("--top-n", type=int, default=200, help="IC 去重后保留因子数")
     ap.add_argument("--horizon", type=int, default=1, help="前瞻收益天数")
     ap.add_argument("--screen-days", type=int, default=500)
     ap.add_argument("--min-coverage", type=float, default=0.5)
