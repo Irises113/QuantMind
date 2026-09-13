@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""因子工厂: QuantDB 富字段 × 算子 × 窗口 → 组合因子 → IC 筛选 → 训练 parquet
+"""因子工厂: QuantDB 富字段 × 算子 × 窗口（+ 二元组合）→ 组合因子 → IC 筛选 → 训练 parquet
 
 与 alpha_library_factors.py 的区别:
   - alpha_library 只用 OHLCV 生成 429 个经典因子；
@@ -7,14 +7,20 @@
     组合生成成千上万个「表达式因子」，再用 IC/ICIR 筛选、相关性去重，
     产出可训练 parquet（默认写用户自定义市场 quantcustom）。
 
+性能设计:
+  - 逐日秩相关 IC 全 numpy 向量化（无 pandas rank，数千因子分钟级）；
+  - 两遍流式：pass1 逐字段生成并只保留指标（内存 O(一个字段)），
+    pass2 只重算进入候选池的 top 因子再去重写盘；
+  - zstd 压缩落盘，体积较 snappy 再降。
+
 产物:
-  <out>/dt=YYYYMMDD/data.parquet   (列: symbol(suffix) + date + 因子列 float32)
+  <out>/dt=YYYYMMDD/data.parquet   (列: symbol(suffix) + date + OHLCV + 因子 float32)
   <out>/MANIFEST.csv                (factor_name, expression, ic, icir, coverage, kept)
   <out>/PROPOSALS.json              (表达式清单，供量化研究/特征目录导入)
 
 用法（容器内）:
   python /app/backend/scripts/factor_factory.py --smoke
-  python /app/backend/scripts/factor_factory.py --top-n 2000 --windows 5,10,20,60
+  python /app/backend/scripts/factor_factory.py --start-date 2025-09-01 --end-date 2026-08-31 --top-n 200
 """
 
 from __future__ import annotations
@@ -55,7 +61,6 @@ def _resolve_dir(env_key: str, container: str, project_sub: str) -> Path:
     for c in candidates:
         if c and Path(c).is_dir():
             return Path(c)
-    # 输出目录可能尚不存在 → 取 env / 容器 / 项目
     fallback = os.getenv(env_key) or container or str(PROJECT_ROOT / "data" / project_sub)
     return Path(fallback)
 
@@ -70,7 +75,6 @@ ML_DIR = QUANTDB_ROOT / "6_ml_datasets"
 # 2. 基字段白名单（剔除 OHLCV/ID，取 QuantDB 预计算数值字段）
 # ---------------------------------------------------------------------------
 
-# l1_factors: 15 大类里挑高价值、非共线的字段
 L1_FIELDS = [
     # 换手 / 流动性
     "turn_5", "turn_20", "turn_std_20", "turn_z_20", "turn_ratio_1_5",
@@ -107,7 +111,6 @@ L1_FIELDS = [
     "concept_crowding_max", "concept_flow_rank", "concept_leader_score",
 ]
 
-# features_daily: 技术 + 估值补充（与 l1 去重后使用）
 FEATURES_FIELDS = [
     "rsi_14", "kdj_k", "kdj_d", "kdj_j", "macd_hist", "vol_atr_14", "beta_20",
     "pe_ttm", "pb", "ps_ttm", "dividend_rate", "total_mv", "float_mv",
@@ -126,9 +129,16 @@ SMOKE_L1_FIELDS = [
     "ind_strength_20", "concept_hot_score",
 ]
 
+# 二元组合的锚字段（覆盖价值/质量/成长/动量/波动/流动性/资金/风格/行业/概念）
+BINARY_ANCHORS = [
+    "fun_bp", "fun_ep", "fun_roe", "fun_np_growth", "fun_peg",
+    "mom_ret_20d", "mom_ret_60d", "vol_std_20", "turn_20", "mfi_14",
+    "amt_net_flow_20", "style_idio_vol_20", "ind_strength_20", "concept_hot_score",
+]
+
 
 # ---------------------------------------------------------------------------
-# 3. 算子定义（(op_name, value_fn, expr_fn)；窗口算子 value_fn(x, w)，截面算子 value_fn(x)）
+# 3. 算子定义
 # ---------------------------------------------------------------------------
 
 WINDOW_OPS = [
@@ -165,7 +175,7 @@ CS_OP_BY_NAME = {name: (fn, expr) for name, fn, expr in CS_OPS}
 _SANITIZE = re.compile(r"[^a-zA-Z0-9_]+")
 
 
-def _feature_name(op: str, field: str, window: int | None) -> str:
+def _feature_name(op: str, field: str, window: int | None = None) -> str:
     base = f"ff_{op}{window}_{field}" if window else f"ff_{op}_{field}"
     return _SANITIZE.sub("_", base).lower()[:64]
 
@@ -176,7 +186,6 @@ def _feature_name(op: str, field: str, window: int | None) -> str:
 
 
 def _parse_dt(series: pd.Series) -> pd.Series:
-    """dt 可能是 '20160104' / 20160104 / Timestamp，统一转 datetime。"""
     s = series.astype(str)
     out = pd.to_datetime(s, format="%Y%m%d", errors="coerce")
     bad = out.isna()
@@ -231,7 +240,7 @@ def load_fields(
         wide = df.pivot_table(index="_dt", columns="symbol", values=f, aggfunc="last")
         wide = wide.sort_index()
         if wide.notna().to_numpy().any():
-            out[f] = wide.astype("float64")
+            out[f] = wide.astype("float32")
     return out
 
 
@@ -242,7 +251,6 @@ def load_close(
     end: pd.Timestamp | None = None,
     max_symbols: int | None = None,
 ) -> pd.DataFrame:
-    """daily_forward 收盘价宽表（用于前瞻收益 / IC）。"""
     return load_ohlcv(
         ["close"], start_year=start_year, start=start, end=end, max_symbols=max_symbols
     )["close"]
@@ -258,8 +266,7 @@ def load_ohlcv(
 ) -> dict[str, pd.DataFrame]:
     """daily_forward 行情宽表 {col: index=time, cols=symbol}。
 
-    CUSTOM 市场的训练读取器需要因子源自带 OHLCV（其 daily_backward 未部署时
-    会用同目录 l1_factors 作为行情补给），故工厂产物需内联这些列。
+    CUSTOM 市场的训练读取器需要因子源自带 OHLCV，故工厂产物需内联这些列。
     """
     glob = str(QUANTDB_ROOT / "1_kline_data" / "daily_forward" / "dt=*" / "data.parquet")
     sel = ", ".join(["symbol", "time"] + [f'"{c}"' for c in cols])
@@ -292,156 +299,196 @@ def load_ohlcv(
 
 
 # ---------------------------------------------------------------------------
-# 5. 因子生成
+# 5. 因子生成（逐字段 + 二元组合）
 # ---------------------------------------------------------------------------
 
 
-def generate_factors(
-    base: dict[str, pd.DataFrame],
-    fields: list[str],
+def generate_field_factors(
+    x: pd.DataFrame,
+    field: str,
     *,
     windows: list[int],
     ops: list[str],
     cs_ops: list[str],
-    max_factors: int | None = None,
-) -> dict[str, tuple[pd.DataFrame, str, str]]:
-    """生成 {feature_name: (values, expression, field)}。"""
-    out: dict[str, tuple[pd.DataFrame, str, str]] = {}
-    for field in fields:
-        x = base.get(field)
-        if x is None or x.empty:
+) -> dict[str, tuple[pd.DataFrame, str]]:
+    """对单字段生成 {feature_name: (values, expression)}。"""
+    out: dict[str, tuple[pd.DataFrame, str]] = {}
+    for op in cs_ops:
+        if op not in CS_OP_BY_NAME:
             continue
-        # 截面算子（无窗口）
-        for op in cs_ops:
-            if op not in CS_OP_BY_NAME:
-                continue
-            fn, expr = CS_OP_BY_NAME[op]
-            name = _feature_name(op, field, None)
+        fn, expr = CS_OP_BY_NAME[op]
+        try:
+            out[_feature_name(op, field)] = (fn(x).astype(np.float32), expr(field))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("op %s on %s failed: %s", op, field, exc)
+    for op in ops:
+        if op not in OP_BY_NAME:
+            continue
+        fn, expr = OP_BY_NAME[op]
+        for w in windows:
             try:
-                out[name] = (fn(x).astype(np.float32), expr(field), field)
+                out[_feature_name(op, field, w)] = (
+                    fn(x, w).astype(np.float32),
+                    expr(field, w),
+                )
             except Exception as exc:  # noqa: BLE001
-                log.debug("op %s on %s failed: %s", op, field, exc)
-        # 窗口算子
-        for op in ops:
-            if op not in OP_BY_NAME:
-                continue
-            fn, expr = OP_BY_NAME[op]
-            for w in windows:
-                name = _feature_name(op, field, w)
-                try:
-                    out[name] = (fn(x, w).astype(np.float32), expr(field, w), field)
-                except Exception as exc:  # noqa: BLE001
-                    log.debug("op %s(w=%d) on %s failed: %s", op, w, field, exc)
-        if max_factors and len(out) >= max_factors:
-            break
-    log.info("generated %d candidate factors from %d fields", len(out), len(fields))
+                log.debug("op %s(w=%d) on %s failed: %s", op, w, field, exc)
+    return out
+
+
+def generate_binary_factors(
+    base: dict[str, pd.DataFrame],
+    anchors: list[str],
+    *,
+    windows: list[int],
+    ops: tuple[str, ...] = ("csdiff", "csratio", "tscorr"),
+) -> dict[str, tuple[pd.DataFrame, str]]:
+    """锚字段两两组合：截面差/比值/滚动相关。"""
+    avail = [a for a in anchors if a in base]
+    out: dict[str, tuple[pd.DataFrame, str]] = {}
+    for i, a in enumerate(avail):
+        for b in avail[i + 1:]:
+            xa, xb = base[a], base[b]
+            if "csdiff" in ops:
+                out[_feature_name("bincsdiff", f"{a}_{b}")] = (
+                    (alf.R(xa) - alf.R(xb)).astype(np.float32),
+                    f"(RANK(${a}) - RANK(${b}))",
+                )
+            if "csratio" in ops:
+                out[_feature_name("bincsratio", f"{a}_{b}")] = (
+                    (alf.R(xa) / (alf.R(xb) + EPS)).astype(np.float32),
+                    f"(RANK(${a}) / (RANK(${b}) + 1e-12))",
+                )
+            if "tscorr" in ops:
+                for w in windows:
+                    out[_feature_name("bintscorr", f"{a}_{b}", w)] = (
+                        alf.CORR(xa, xb, w).astype(np.float32),
+                        f"CORR(${a}, ${b}, {w})",
+                    )
+    log.info("binary combos: %d anchors → %d candidates", len(avail), len(out))
     return out
 
 
 # ---------------------------------------------------------------------------
-# 6. IC / ICIR / 覆盖率
+# 6. 向量化逐日秩相关 IC
 # ---------------------------------------------------------------------------
 
 
-def _daily_rank_ic(fac: pd.DataFrame, fwd: pd.DataFrame) -> pd.Series:
-    """逐日横截面 Spearman IC（秩相关 = 秩的 Pearson）。"""
-    rf = fac.rank(axis=1)
-    rr = fwd.rank(axis=1)
-    rf_c = rf.sub(rf.mean(axis=1), axis=0)
-    rr_c = rr.sub(rr.mean(axis=1), axis=0)
-    num = (rf_c * rr_c).sum(axis=1)
-    den = np.sqrt((rf_c**2).sum(axis=1) * (rr_c**2).sum(axis=1))
-    ic = num / den.replace(0, np.nan)
-    return ic.replace([np.inf, -np.inf], np.nan).dropna()
-
-
-def screen_factors(
-    factors: dict[str, tuple[pd.DataFrame, str, str]],
-    close: pd.DataFrame,
-    *,
-    horizon: int = 1,
-    screen_days: int = 500,
-    min_coverage: float = 0.5,
-) -> pd.DataFrame:
-    """按最近 screen_days 计算每个因子的 IC/ICIR/覆盖率，返回带指标的清单。"""
-    fwd = close.shift(-horizon) / close - 1.0
-    screen_dates = close.index[-screen_days:]
-    fwd_win = fwd.reindex(index=screen_dates)
-
-    rows = []
-    for name, (fac, expr, field) in factors.items():
-        sub = fac.reindex(index=screen_dates, columns=close.columns)
-        coverage = float(sub.notna().to_numpy().mean())
-        if coverage < min_coverage:
-            rows.append({
-                "factor_name": name, "expression": expr, "field": field,
-                "ic": np.nan, "icir": np.nan, "coverage": coverage, "n_ic_days": 0,
-            })
+def _rank_rows(a: np.ndarray) -> np.ndarray:
+    """按行平均秩（NaN 保持 NaN）。a: (n_days, n_syms)。"""
+    d, n = a.shape
+    out = np.full((d, n), np.nan, dtype=np.float64)
+    for i in range(d):
+        row = a[i]
+        mask = np.isfinite(row)
+        m = int(mask.sum())
+        if m < 5:
             continue
-        ic = _daily_rank_ic(sub, fwd_win)
-        ic_mean = float(ic.mean()) if len(ic) else np.nan
-        ic_std = float(ic.std(ddof=1)) if len(ic) > 1 else np.nan
-        icir = float(ic_mean / ic_std) if ic_std and ic_std > 0 else 0.0
-        rows.append({
-            "factor_name": name, "expression": expr, "field": field,
-            "ic": ic_mean, "icir": icir, "coverage": coverage, "n_ic_days": int(len(ic)),
-        })
-    df = pd.DataFrame(rows)
-    df["abs_ic"] = df["ic"].abs()
-    log.info("screened %d factors (mean |IC| = %.4f)", len(df), df["abs_ic"].mean())
-    return df
+        idx = np.flatnonzero(mask)
+        vals = row[idx]
+        order = np.argsort(vals, kind="mergesort")
+        r = np.empty(m, dtype=np.float64)
+        r[order] = np.arange(1, m + 1, dtype=np.float64)
+        sv = vals[order]
+        if m > 1:
+            change = np.flatnonzero(sv[1:] != sv[:-1])
+            starts = np.concatenate(([0], change + 1))
+            ends = np.concatenate((change + 1, [m]))
+            for s, e in zip(starts, ends, strict=False):
+                if e - s > 1:
+                    r[order[s:e]] = (s + 1 + e) / 2.0
+        out[i, idx] = r
+    return out
+
+
+def _daily_rank_ic(fac: np.ndarray, fwd: np.ndarray) -> np.ndarray:
+    """逐日横截面 Spearman IC（秩的 Pearson），返回每天一个 IC。"""
+    rf = _rank_rows(fac)
+    rr = _rank_rows(fwd)
+    m = np.isfinite(rf) & np.isfinite(rr)
+    cnt = m.sum(axis=1).astype(np.float64)
+    rfz = np.where(m, rf, 0.0)
+    rrz = np.where(m, rr, 0.0)
+    den = np.maximum(cnt, 1.0)
+    fm = rfz.sum(axis=1) / den
+    rm = rrz.sum(axis=1) / den
+    fc = np.where(m, rf - fm[:, None], 0.0)
+    rc = np.where(m, rr - rm[:, None], 0.0)
+    cov = (fc * rc).sum(axis=1) / den
+    vf = (fc**2).sum(axis=1) / den
+    vr = (rc**2).sum(axis=1) / den
+    sd = np.sqrt(vf * vr)
+    ic = np.where(sd > 1e-12, cov / np.where(sd > 1e-12, sd, 1.0), np.nan)
+    keep = (cnt >= 5) & np.isfinite(ic)
+    return ic[keep]
+
+
+def screen_one(
+    name: str,
+    fac: pd.DataFrame,
+    fwd: np.ndarray,
+    expr: str,
+    field: str,
+    *,
+    min_coverage: float,
+) -> dict:
+    vals = fac.to_numpy(dtype=np.float32)
+    coverage = float(np.isfinite(vals).mean())
+    if coverage < min_coverage or vals.shape[0] != fwd.shape[0]:
+        return {"factor_name": name, "expression": expr, "field": field,
+                "ic": np.nan, "icir": np.nan, "coverage": coverage, "n_ic_days": 0}
+    ic = _daily_rank_ic(vals, fwd)
+    ic_mean = float(ic.mean()) if ic.size else np.nan
+    ic_std = float(ic.std(ddof=1)) if ic.size > 1 else np.nan
+    icir = float(ic_mean / ic_std) if ic_std and ic_std > 0 else 0.0
+    return {"factor_name": name, "expression": expr, "field": field,
+            "ic": ic_mean, "icir": icir, "coverage": coverage, "n_ic_days": int(ic.size)}
 
 
 # ---------------------------------------------------------------------------
-# 7. 相关性去重
+# 7. 相关性去重（先按日期采样再堆叠，控内存）
 # ---------------------------------------------------------------------------
 
 
 def dedup_by_correlation(
+    pool: pd.DataFrame,
     factors: dict[str, tuple[pd.DataFrame, str, str]],
-    screened: pd.DataFrame,
     close: pd.DataFrame,
     *,
     top_n: int,
     corr_threshold: float = 0.85,
-    screen_days: int = 500,
     max_samples: int = 20000,
+    score_col: str = "ic",
 ) -> pd.DataFrame:
-    """按 |IC| 排序后贪心去重（|corr|>阈值则丢弃），返回保留的 top_n。"""
-    cand = screened.dropna(subset=["ic"]).sort_values("abs_ic", ascending=False).head(top_n * 3)
-    if cand.empty:
-        return screened.head(0)
-
-    screen_dates = close.index[-screen_days:]
-    # 先按日期采样再堆叠：避免构造 (n_days×n_syms) × n_candidates 的超大中间矩阵
+    """候选池内按 |score| 排序后贪心去重（|corr|>阈值丢弃），保留 top_n。"""
+    pool = pool.dropna(subset=["ic"])
+    if pool.empty:
+        return pool.head(0)
     n_syms = max(1, close.shape[1])
-    max_dates = max(5, min(len(screen_dates), max_samples // n_syms))
-    step = max(1, len(screen_dates) // max_dates)
-    dates = screen_dates[::step][:max_dates]
+    max_dates = max(5, min(len(close.index), max_samples // n_syms))
+    step = max(1, len(close.index) // max_dates)
+    dates = close.index[::step][:max_dates]
 
     mat = {}
-    for name in cand["factor_name"]:
+    for name in pool["factor_name"]:
+        if name not in factors:
+            continue
         s = factors[name][0].reindex(index=dates, columns=close.columns)
         mat[name] = s.to_numpy(dtype=np.float32).ravel()
     stack = pd.DataFrame(mat)
     corr = stack.corr(min_periods=200)
 
     kept: list[str] = []
-    for name in cand["factor_name"]:
-        if len(kept) >= top_n:
-            break
-        redundant = False
-        for k in kept:
-            c = corr.at[name, k] if name in corr.index and k in corr.columns else np.nan
-            if np.isfinite(c) and abs(c) > corr_threshold:
-                redundant = True
-                break
-        if not redundant:
+    for name in pool["factor_name"]:
+        if len(kept) >= top_n or name not in corr.index:
+            continue
+        if all(
+            not (np.isfinite(corr.at[name, k]) and abs(corr.at[name, k]) > corr_threshold)
+            for k in kept
+        ):
             kept.append(name)
-    log.info("dedup: %d candidates → %d kept (threshold=%.2f)", len(cand), len(kept), corr_threshold)
-    out = screened.set_index("factor_name").loc[kept].reset_index()
-    out["kept"] = True
-    return out
+    log.info("dedup: %d pool → %d kept (threshold=%.2f)", len(pool), len(kept), corr_threshold)
+    return pool.set_index("factor_name").loc[kept].reset_index()
 
 
 # ---------------------------------------------------------------------------
@@ -457,29 +504,24 @@ def write_factor_partitions(
     start_dt: str = "20160101",
     rebuild: bool = False,
     ohlcv: dict[str, pd.DataFrame] | None = None,
+    compression: str = "zstd",
 ) -> int:
-    """按日写 <out_root>/dt=YYYYMMDD/data.parquet。
-
-    列: symbol(suffix) + date + OHLCV + 因子列（float32）。
-    内联 OHLCV 使 CUSTOM 因子源可被训练读取器直接消费（标签需要行情列）。
-    """
+    """按日写 <out_root>/dt=YYYYMMDD/data.parquet（symbol(suffix)+date+OHLCV+因子, float32）。"""
     frames = [factors[n][0] for n in names]
     dates = frames[0].index
     syms = list(frames[0].columns)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    ohlcv_cols = list((ohlcv or {}).keys())
     ohlcv_arrs = [
-        (ohlcv[c].reindex(index=dates, columns=syms).values, c) for c in ohlcv_cols
+        (v.reindex(index=dates, columns=syms).values, c) for c, v in (ohlcv or {}).items()
     ]
-
     written = 0
     chunk = 40
     n = len(dates)
     arrs = [f.values for f in frames]
     for b in range(0, n, chunk):
         b_end = min(b + chunk, n)
-        block = np.stack([a[b:b_end] for a in arrs], axis=2)  # (nb, n_sym, n_fac)
+        block = np.stack([a[b:b_end] for a in arrs], axis=2)
         for k in range(b, b_end):
             dt_str = pd.Timestamp(dates[k]).strftime("%Y%m%d")
             if dt_str < start_dt:
@@ -498,7 +540,7 @@ def write_factor_partitions(
             target.parent.mkdir(parents=True, exist_ok=True)
             tmp = target.parent / ".tmp-data.parquet"
             try:
-                day.to_parquet(tmp, index=False)
+                day.to_parquet(tmp, index=False, compression=compression)
                 tmp.replace(target)
                 written += 1
             finally:
@@ -514,7 +556,6 @@ def write_factor_partitions(
 
 
 def _select_fields(smoke: bool, limit: int | None) -> list[tuple[str, str]]:
-    """返回 [(dataset, field)]，l1 优先，features_daily 补充不重名者。"""
     if smoke:
         l1 = SMOKE_L1_FIELDS
         fd: list[str] = ["rsi_14", "macd_hist", "pe_ttm", "pb"]
@@ -546,18 +587,21 @@ def run(args: argparse.Namespace) -> None:
     windows = [int(w) for w in str(args.windows).split(",") if w.strip()]
     ops = [o.strip() for o in str(args.ops).split(",") if o.strip()]
     cs_ops = [o.strip() for o in str(args.cs_ops).split(",") if o.strip()]
+    binary_ops = tuple(o.strip() for o in str(args.binary_ops).split(",") if o.strip())
     pairs = _select_fields(args.smoke, args.limit_fields)
 
     start_ts = pd.Timestamp(args.start_date) if args.start_date else None
     end_ts = pd.Timestamp(args.end_date) if args.end_date else None
     warmup = (max(windows) + 10) if windows else 70
     load_start = (start_ts - pd.Timedelta(days=warmup)) if start_ts is not None else None
-    log.info("mode=%s fields=%d windows=%s ops=%s cs_ops=%s range=%s~%s warmup=%dd",
-             "SMOKE" if args.smoke else "FULL", len(pairs), windows, ops, cs_ops,
-             start_ts.date() if start_ts is not None else "-",
-             end_ts.date() if end_ts is not None else "-", warmup)
+    log.info(
+        "mode=%s fields=%d windows=%s ops=%s cs_ops=%s binary=%s range=%s~%s warmup=%dd score=%s",
+        "SMOKE" if args.smoke else "FULL", len(pairs), windows, ops, cs_ops,
+        list(binary_ops), start_ts.date() if start_ts is not None else "-",
+        end_ts.date() if end_ts is not None else "-", warmup, args.score,
+    )
 
-    # 1) 加载基字段（含 warmup，保证窗口算子前段有效）
+    # 1) 加载基字段（含 warmup）
     by_dataset: dict[str, list[str]] = {}
     for ds, f in pairs:
         by_dataset.setdefault(ds, []).append(f)
@@ -572,33 +616,72 @@ def run(args: argparse.Namespace) -> None:
     close = load_close(
         start_year=args.start_year, start=load_start, end=end_ts, max_symbols=args.max_symbols
     )
-    # 对齐：仅保留基字段与 close 共有的日期
-    base = {k: v.reindex(index=close.index).reindex(columns=close.columns) for k, v in base.items()}
-
-    # 2) 生成候选因子（含 warmup 后切片到目标窗口）
+    base = {k: v.reindex(index=close.index, columns=close.columns) for k, v in base.items()}
     fields = [f for _, f in pairs if f in base]
-    factors = generate_factors(
-        base, fields, windows=windows, ops=ops, cs_ops=cs_ops, max_factors=args.max_candidates
-    )
-    if not factors:
-        log.warning("no factors generated; abort")
-        return
-    factors = {n: (_slice(v, start_ts, end_ts), e, f) for n, (v, e, f) in factors.items()}
+
     close_win = _slice(close, start_ts, end_ts)
+    fwd_win = (close_win.shift(-args.horizon) / close_win - 1.0).to_numpy(dtype=np.float32)
 
-    # 3) 筛选（screen_days 超过窗口时自然用满窗口）
-    screened = screen_factors(
-        factors, close_win, horizon=args.horizon,
-        screen_days=args.screen_days, min_coverage=args.min_coverage,
-    )
+    # 2) pass1：逐字段生成 + 只保留指标（内存 O(一个字段)）
+    rows: list[dict] = []
+    for field in fields:
+        facs = generate_field_factors(
+            base[field], field, windows=windows, ops=ops, cs_ops=cs_ops
+        )
+        for name, (v, expr) in facs.items():
+            rows.append(screen_one(
+                name, _slice(v, start_ts, end_ts), fwd_win, expr, field,
+                min_coverage=args.min_coverage,
+            ))
+        del facs
+        if args.max_candidates and len(rows) >= args.max_candidates:
+            break
+    if binary_ops:
+        for name, (v, expr) in generate_binary_factors(
+            base, BINARY_ANCHORS, windows=windows, ops=binary_ops
+        ).items():
+            rows.append(screen_one(
+                name, _slice(v, start_ts, end_ts), fwd_win, expr, "binary",
+                min_coverage=args.min_coverage,
+            ))
+    screened = pd.DataFrame(rows)
+    screened["abs_score"] = screened[args.score].abs()
+    log.info("pass1 done: %d candidates (mean |IC|=%.4f, %.0fs)",
+             len(screened), screened["ic"].abs().mean(), time.time() - t0)
 
-    # 4) 去重
+    # 3) 选池
+    cand = screened.dropna(subset=["ic"]).loc[
+        screened["coverage"] >= args.min_coverage
+    ].sort_values("abs_score", ascending=False)
+    pool = cand.head(max(args.top_n, int(args.top_n * args.pool_factor)))
+    pool_names = set(pool["factor_name"])
+    log.info("pool selected: %d (top_n=%d × pool_factor=%.1f)", len(pool), args.top_n, args.pool_factor)
+
+    # 4) pass2：只重算候选池因子 → 去重 → 写盘
+    factors: dict[str, tuple[pd.DataFrame, str, str]] = {}
+    for field in fields:
+        facs = generate_field_factors(
+            base[field], field, windows=windows, ops=ops, cs_ops=cs_ops
+        )
+        for name, (v, expr) in facs.items():
+            if name in pool_names:
+                factors[name] = (_slice(v, start_ts, end_ts), expr, field)
+        del facs
+    if binary_ops:
+        for name, (v, expr) in generate_binary_factors(
+            base, BINARY_ANCHORS, windows=windows, ops=binary_ops
+        ).items():
+            if name in pool_names:
+                factors[name] = (_slice(v, start_ts, end_ts), expr, "binary")
+    log.info("pass2 recomputed %d pool factors", len(factors))
+
     kept = dedup_by_correlation(
-        factors, screened, close_win,
-        top_n=args.top_n, corr_threshold=args.corr_threshold, screen_days=args.screen_days,
+        pool, factors, close_win,
+        top_n=args.top_n, corr_threshold=args.corr_threshold, score_col=args.score,
     )
-    kept = kept.sort_values("abs_ic", ascending=False)
-    kept_names = kept["factor_name"].tolist()
+    kept = kept.sort_values("abs_score", ascending=False)
+    kept["kept"] = True
+    kept_names = [n for n in kept["factor_name"] if n in factors]
     log.info("final kept: %d", len(kept_names))
 
     out_root = Path(args.out) if args.out else (CUSTOM_ROOT / "6_ml_datasets" / "l1_factors")
@@ -606,15 +689,15 @@ def run(args: argparse.Namespace) -> None:
 
     if args.dry_run:
         log.info("dry-run: skip partition write")
-    else:
+    elif kept_names:
         out_root.mkdir(parents=True, exist_ok=True)
         ohlcv = load_ohlcv(
             ["open", "high", "low", "close", "volume", "amount"],
             start_year=args.start_year, start=load_start, end=end_ts, max_symbols=args.max_symbols,
         )
         n = write_factor_partitions(
-            factors, kept_names, out_root=out_root,
-            start_dt=start_dt, rebuild=args.rebuild, ohlcv=ohlcv,
+            factors, kept_names, out_root=out_root, start_dt=start_dt,
+            rebuild=args.rebuild, ohlcv=ohlcv, compression=args.compression,
         )
         log.info("partitions: %d", n)
         kept.to_csv(out_root / "MANIFEST.csv", index=False, encoding="utf-8")
@@ -643,12 +726,16 @@ def main() -> None:
     ap.add_argument("--windows", default="5,10,20,60")
     ap.add_argument("--ops", default="tsrank,tsstd,roc,zscore,delta,decay,slope")
     ap.add_argument("--cs-ops", default="csrank,cszscore")
-    ap.add_argument("--max-candidates", type=int, default=None, help="生成上限（调试用）")
+    ap.add_argument("--binary-ops", default="csdiff,csratio,tscorr", help="二元组合算子；传空禁用")
+    ap.add_argument("--max-candidates", type=int, default=None)
     ap.add_argument("--top-n", type=int, default=200, help="IC 去重后保留因子数")
+    ap.add_argument("--pool-factor", type=float, default=3.0, help="候选池 = top_n × pool_factor")
+    ap.add_argument("--score", default="ic", choices=["ic", "icir"], help="排序/去重依据")
     ap.add_argument("--horizon", type=int, default=1, help="前瞻收益天数")
     ap.add_argument("--screen-days", type=int, default=500)
     ap.add_argument("--min-coverage", type=float, default=0.5)
     ap.add_argument("--corr-threshold", type=float, default=0.85)
+    ap.add_argument("--compression", default="zstd", help="parquet 压缩: zstd/snappy/none")
     ap.add_argument("--start-dt", default="20160101")
     ap.add_argument("--out", default=None, help="输出根目录（默认 quantcustom/6_ml_datasets/l1_factors）")
     ap.add_argument("--rebuild", action="store_true")
@@ -660,6 +747,7 @@ def main() -> None:
         args.start_year = args.start_year or 2024
         args.windows = "20"
         args.ops = "tsrank,roc,zscore,delta"
+        args.binary_ops = "csdiff"
     run(args)
 
 
