@@ -310,15 +310,19 @@ def generate_field_factors(
     windows: list[int],
     ops: list[str],
     cs_ops: list[str],
+    only: set[str] | None = None,
 ) -> dict[str, tuple[pd.DataFrame, str]]:
-    """对单字段生成 {feature_name: (values, expression)}。"""
+    """对单字段生成 {feature_name: (values, expression)}；only 给定时只算其中因子。"""
     out: dict[str, tuple[pd.DataFrame, str]] = {}
     for op in cs_ops:
         if op not in CS_OP_BY_NAME:
             continue
+        name = _feature_name(op, field)
+        if only is not None and name not in only:
+            continue
         fn, expr = CS_OP_BY_NAME[op]
         try:
-            out[_feature_name(op, field)] = (fn(x).astype(np.float32), expr(field))
+            out[name] = (fn(x).astype(np.float32), expr(field))
         except Exception as exc:  # noqa: BLE001
             log.debug("op %s on %s failed: %s", op, field, exc)
     for op in ops:
@@ -326,11 +330,11 @@ def generate_field_factors(
             continue
         fn, expr = OP_BY_NAME[op]
         for w in windows:
+            name = _feature_name(op, field, w)
+            if only is not None and name not in only:
+                continue
             try:
-                out[_feature_name(op, field, w)] = (
-                    fn(x, w).astype(np.float32),
-                    expr(field, w),
-                )
+                out[name] = (fn(x, w).astype(np.float32), expr(field, w))
             except Exception as exc:  # noqa: BLE001
                 log.debug("op %s(w=%d) on %s failed: %s", op, w, field, exc)
     return out
@@ -574,6 +578,40 @@ def _slice(df: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timestamp | Non
     return df.loc[mask]
 
 
+# pass1 并行上下文：fork 子进程通过 COW 继承 base，无需序列化大对象
+_P1: dict = {}
+
+
+def _field_worker(job: str | None) -> list[dict]:
+    """单字段（job=None 表示二元组合）生成 + 筛选，返回指标行。"""
+    start, end = _P1["start"], _P1["end"]
+    if job is None:
+        facs = generate_binary_factors(
+            _P1["base"], _P1["anchors"], windows=_P1["windows"], ops=_P1["binary_ops"]
+        )
+        field = "binary"
+    else:
+        facs = generate_field_factors(
+            _P1["base"][job], job,
+            windows=_P1["windows"], ops=_P1["ops"], cs_ops=_P1["cs_ops"],
+        )
+        field = job
+    return [
+        screen_one(name, _slice(v, start, end), _P1["fwd_rank"], expr, field,
+                   min_coverage=_P1["min_cov"])
+        for name, (v, expr) in facs.items()
+    ]
+
+
+def _select_pool_fields(screened: pd.DataFrame, pool_names: set[str]) -> dict[str, set[str]]:
+    """pool 因子按 field 归组，便于 pass2 只重算需要的字段/因子。"""
+    by_field: dict[str, set[str]] = {}
+    for r in screened.itertuples():
+        if r.factor_name in pool_names:
+            by_field.setdefault(r.field, set()).add(r.factor_name)
+    return by_field
+
+
 def run(args: argparse.Namespace) -> None:
     t0 = time.time()
     windows = [int(w) for w in str(args.windows).split(",") if w.strip()]
@@ -615,29 +653,42 @@ def run(args: argparse.Namespace) -> None:
     fwd_win = (close_win.shift(-args.horizon) / close_win - 1.0).to_numpy(dtype=np.float32)
     fwd_rank = _rank_rows(fwd_win)  # 前瞻收益秩只算一次，全因子复用
 
-    # 2) pass1：逐字段生成 + 只保留指标（内存 O(一个字段)）
-    rows: list[dict] = []
-    for field in fields:
-        facs = generate_field_factors(
-            base[field], field, windows=windows, ops=ops, cs_ops=cs_ops
-        )
-        for name, (v, expr) in facs.items():
-            rows.append(screen_one(
-                name, _slice(v, start_ts, end_ts), fwd_rank, expr, field,
-                min_coverage=args.min_coverage,
-            ))
-        del facs
-        if args.max_candidates and len(rows) >= args.max_candidates:
-            break
+    # 2) pass1：逐字段（可选多进程）生成 + 只保留指标（内存 O(字段)）
+    _P1.update(
+        base=base, start=start_ts, end=end_ts, fwd_rank=fwd_rank,
+        windows=windows, ops=ops, cs_ops=cs_ops, binary_ops=binary_ops,
+        anchors=BINARY_ANCHORS, min_cov=args.min_coverage,
+    )
+    jobs: list[str | None] = list(fields)
     if binary_ops:
-        for name, (v, expr) in generate_binary_factors(
-            base, BINARY_ANCHORS, windows=windows, ops=binary_ops
-        ).items():
-            rows.append(screen_one(
-                name, _slice(v, start_ts, end_ts), fwd_rank, expr, "binary",
-                min_coverage=args.min_coverage,
-            ))
+        jobs.append(None)
+    n_jobs = args.jobs or min(8, os.cpu_count() or 4)
+    rows: list[dict] = []
+    if n_jobs > 1 and len(jobs) > 1:
+        import multiprocessing as mp
+
+        try:
+            ctx = mp.get_context("fork")
+        except ValueError:
+            ctx = None
+        if ctx is not None:
+            with ctx.Pool(processes=n_jobs) as pool_proc:
+                for i, res in enumerate(pool_proc.imap_unordered(_field_worker, jobs), 1):
+                    rows.extend(res)
+                    if i % 10 == 0 or i == len(jobs):
+                        log.info("pass1 progress %d/%d jobs (%.0fs)", i, len(jobs), time.time() - t0)
+        else:
+            for job in jobs:
+                rows.extend(_field_worker(job))
+    else:
+        for i, job in enumerate(jobs, 1):
+            rows.extend(_field_worker(job))
+            if i % 10 == 0 or i == len(jobs):
+                log.info("pass1 progress %d/%d jobs (%.0fs)", i, len(jobs), time.time() - t0)
     screened = pd.DataFrame(rows)
+    if screened.empty:
+        log.warning("no candidates; abort")
+        return
     screened["abs_score"] = screened[args.score].abs()
     log.info("pass1 done: %d candidates (mean |IC|=%.4f, %.0fs)",
              len(screened), screened["ic"].abs().mean(), time.time() - t0)
@@ -650,23 +701,22 @@ def run(args: argparse.Namespace) -> None:
     pool_names = set(pool["factor_name"])
     log.info("pool selected: %d (top_n=%d × pool_factor=%.1f)", len(pool), args.top_n, args.pool_factor)
 
-    # 4) pass2：只重算候选池因子 → 去重 → 写盘
+    # 4) pass2：只重算候选池涉及的字段/因子 → 去重 → 写盘
+    pool_by_field = _select_pool_fields(screened, pool_names)
     factors: dict[str, tuple[pd.DataFrame, str, str]] = {}
-    for field in fields:
-        facs = generate_field_factors(
-            base[field], field, windows=windows, ops=ops, cs_ops=cs_ops
-        )
+    for field, names in pool_by_field.items():
+        if field == "binary":
+            facs = generate_binary_factors(
+                base, BINARY_ANCHORS, windows=windows, ops=binary_ops
+            )
+        else:
+            facs = generate_field_factors(
+                base[field], field, windows=windows, ops=ops, cs_ops=cs_ops, only=names
+            )
         for name, (v, expr) in facs.items():
-            if name in pool_names:
+            if name in names:
                 factors[name] = (_slice(v, start_ts, end_ts), expr, field)
-        del facs
-    if binary_ops:
-        for name, (v, expr) in generate_binary_factors(
-            base, BINARY_ANCHORS, windows=windows, ops=binary_ops
-        ).items():
-            if name in pool_names:
-                factors[name] = (_slice(v, start_ts, end_ts), expr, "binary")
-    log.info("pass2 recomputed %d pool factors", len(factors))
+    log.info("pass2 recomputed %d factors from %d fields", len(factors), len(pool_by_field))
 
     kept = dedup_by_correlation(
         pool, factors, close_win,
@@ -721,6 +771,7 @@ def main() -> None:
     ap.add_argument("--cs-ops", default="csrank,cszscore")
     ap.add_argument("--binary-ops", default="csdiff,csratio,tscorr", help="二元组合算子；传空禁用")
     ap.add_argument("--max-candidates", type=int, default=None)
+    ap.add_argument("--jobs", type=int, default=0, help="pass1 并行进程数（0=自动, 1=串行）")
     ap.add_argument("--top-n", type=int, default=200, help="IC 去重后保留因子数")
     ap.add_argument("--pool-factor", type=float, default=3.0, help="候选池 = top_n × pool_factor")
     ap.add_argument("--score", default="ic", choices=["ic", "icir"], help="排序/去重依据")
