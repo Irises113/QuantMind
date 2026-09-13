@@ -411,21 +411,10 @@ class ChatRequest(BaseModel):
 
 @router.post("/chat")
 async def chat_completions(request: Request, item: ChatRequest):
-    # 1. 解析基础配置 (支持多种环境变量命名方式以对齐服务器 .env)
-    base_url = (
-        os.getenv("AI_IDE_LLM_BASE_URL")
-        or os.getenv("AI_IDE_BASE_URL")
-        or os.getenv("OPENAI_API_BASE")
-        or "https://api.deepseek.com"
-    )
-    model = os.getenv("AI_IDE_LLM_MODEL") or os.getenv("AI_IDE_MODEL") or "deepseek-v4-pro"
-    api_key = (
-        os.getenv("AI_IDE_LLM_API_KEY")
-        or os.getenv("AI_IDE_API_KEY")
-        or os.getenv("OPENAI_API_KEY", "")
-    )
-
-    # 2. 尝试从数据库获取用户私有配置 (个人 Key/模型/接口地址 优先级最高)
+    # 1. 用户配置优先：个人中心「AI 服务配置」(user_profiles) 完整时直接使用
+    api_key = ""
+    base_url = ""
+    model = ""
     user_context = getattr(request.state, "user", None)
     if user_context:
         user_id = user_context.get("user_id")
@@ -440,17 +429,24 @@ async def chat_completions(request: Request, item: ChatRequest):
                     {"user_id": user_id}
                 )
                 row = result.fetchone()
-                if row:
-                    if row[0]:
-                        api_key = row[0]
-                    if row[1]:
-                        base_url = row[1]
-                    if row[2]:
-                        model = row[2]
+                if row and row[0] and row[1] and row[2]:
+                    api_key, base_url, model = row[0], row[1], row[2]
         except Exception as e:
             logger.warning(
                 f"Could not fetch individual LLM config for user {user_id}: {e}"
             )
+
+    # 2. 用户未配置完整时，回退系统全局模型配置（与因子挖掘共用同一解析器）
+    if not (api_key and base_url and model):
+        try:
+            from backend.services.engine.alpha_agent.llm_client import resolve_llm_config
+
+            cfg = resolve_llm_config()
+            if cfg is not None:
+                api_key, base_url, model = cfg.api_key, cfg.base_url, cfg.model
+        except Exception as e:
+            logger.warning(f"resolve_llm_config failed: {e}")
+    base_url = base_url or "https://api.deepseek.com"
 
     # 获取项目根目录，以便读取文档
     project_root = os.getcwd()

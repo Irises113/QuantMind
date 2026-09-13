@@ -66,24 +66,30 @@ async def _fetch_profile_llm_config(user_id: str, tenant_id: str):
         key = (data.get("api_key") or "").strip()
         if not key or _is_placeholder(key):
             return None
-        base = (data.get("llm_base_url") or "").strip() or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        model = (data.get("llm_model") or "").strip() or "qwen-plus"
-        return LLMConfig(api_key=key, base_url=base, model=model, protocol="openai")
+        base = (data.get("llm_base_url") or "").strip()
+        model = (data.get("llm_model") or "").strip()
+        # 以用户设置为准：base/model 缺失视为未配置，回退 env 兜底
+        if not base or not model:
+            return None
+        base = base.rstrip("/")
+        # DeepSeek 等 Anthropic 兼容端点（.../anthropic）走 Anthropic 协议
+        protocol = "anthropic" if "/anthropic" in base or model.lower().startswith("astron") else "openai"
+        return LLMConfig(api_key=key, base_url=base, model=model, protocol=protocol)
     except Exception:
         logger.exception("[alpha-agent] fetch profile llm config failed")
         return None
 
 
 async def _resolve_effective_llm_config(user_id: str, tenant_id: str):
-    """环境变量（平台级）优先；无有效 Key 时回退当前用户 Profile 的 AI-IDE 配置。"""
+    """以用户设置为准：优先当前用户 Profile 的「AI 服务配置」，环境变量仅作兜底。"""
     from backend.services.engine.alpha_agent.llm_client import resolve_llm_config
 
-    cfg = resolve_llm_config()
-    if cfg is not None:
-        return cfg, "env"
     cfg = await _fetch_profile_llm_config(user_id, tenant_id)
     if cfg is not None:
         return cfg, "user_profile"
+    cfg = resolve_llm_config()
+    if cfg is not None:
+        return cfg, "env"
     return None, "none"
 
 
@@ -649,11 +655,11 @@ async def get_llm_config(request: Request):
     from backend.services.engine.alpha_agent.llm_client import resolve_llm_config
 
     auth_user_id, auth_tenant_id = get_authenticated_identity(request)
-    cfg = resolve_llm_config()
-    source = "env"
+    cfg = await _fetch_profile_llm_config(auth_user_id, auth_tenant_id)
+    source = "user_profile"
     if cfg is None:
-        cfg = await _fetch_profile_llm_config(auth_user_id, auth_tenant_id)
-        source = "user_profile"
+        cfg = resolve_llm_config()
+        source = "env"
     if cfg is None:
         return {
             "code": 200,

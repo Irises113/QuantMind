@@ -60,10 +60,14 @@ def resolve_llm_config() -> LLMConfig | None:
         deepseek_key = ""
 
     if deepseek_key:
-        base = os.getenv("DEEPSEEK_BASE_URL", "").strip() or "https://api.deepseek.com/v1"
-        if not base.rstrip("/").endswith("/v1"):
-            base = base.rstrip("/") + "/v1"
+        base = os.getenv("DEEPSEEK_BASE_URL", "").strip() or "https://api.deepseek.com"
+        base = base.rstrip("/")
         model = os.getenv("DEEPSEEK_MODEL", "").strip() or "deepseek-chat"
+        # Anthropic 兼容端点（.../anthropic）：chat() 会再拼 /v1/messages，不能再补 /v1
+        if "/anthropic" in base:
+            return LLMConfig(api_key=deepseek_key, base_url=base, model=model, protocol="anthropic")
+        if not base.endswith("/v1"):
+            base += "/v1"
         return LLMConfig(api_key=deepseek_key, base_url=base, model=model, protocol="openai")
 
     key = (
