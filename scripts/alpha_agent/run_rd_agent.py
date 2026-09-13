@@ -105,8 +105,8 @@ for _f in list(os.listdir('.')):
             pass
 
 try:
-    # Execute factor code
-    {factor_code}
+    # Execute factor code（用 repr 内联，避免多行代码缩进破坏 try 结构）
+    exec({factor_code!r}, globals())
 
     # 若因子代码未自执行（无 __main__ 守卫）或未产出 result.h5，则显式调用 calculate_*()
     _has_result = any(f.endswith('.h5') and 'result' in f.lower() for f in os.listdir('.'))
