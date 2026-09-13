@@ -413,16 +413,17 @@ def dedup_by_correlation(
         return screened.head(0)
 
     screen_dates = close.index[-screen_days:]
-    # 构造采样矩阵：samples × candidates
+    # 先按日期采样再堆叠：避免构造 (n_days×n_syms) × n_candidates 的超大中间矩阵
+    n_syms = max(1, close.shape[1])
+    max_dates = max(5, min(len(screen_dates), max_samples // n_syms))
+    step = max(1, len(screen_dates) // max_dates)
+    dates = screen_dates[::step][:max_dates]
+
     mat = {}
     for name in cand["factor_name"]:
-        s = factors[name][0].reindex(index=screen_dates, columns=close.columns)
-        mat[name] = s.to_numpy().ravel()
+        s = factors[name][0].reindex(index=dates, columns=close.columns)
+        mat[name] = s.to_numpy(dtype=np.float32).ravel()
     stack = pd.DataFrame(mat)
-    # 采样行（含 NaN 的行保留，相关性用 pairwise）
-    if len(stack) > max_samples:
-        idx = np.linspace(0, len(stack) - 1, max_samples).astype(int)
-        stack = stack.iloc[idx]
     corr = stack.corr(min_periods=200)
 
     kept: list[str] = []
