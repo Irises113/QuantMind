@@ -1269,27 +1269,39 @@ class QuantDBDataHub:
 
     @staticmethod
     def _fallback_l1_categories() -> dict:
-        """L1 因子类别兜底（当 catalog 文件不可用时）。"""
+        """L1 因子类别兜底（当 catalog 文件不可用时，与 catalog 的 15 类对齐）。"""
         return {
             "categories": [
-                {"id": "momentum", "name": "动量", "feature_count": 24,
+                {"id": "base", "name": "基础行情", "feature_count": 6,
+                 "sample_features": ["turn_1", "turn_5", "amt_log", "amt_ma_5", "amt_close_pos"]},
+                {"id": "momentum", "name": "动量", "feature_count": 38,
                  "sample_features": ["mom_ret_1d", "mom_ret_5d", "mom_ret_20d", "mom_ma_gap_5", "mom_rsi_14"]},
-                {"id": "volatility", "name": "波动率", "feature_count": 11,
-                 "sample_features": ["vol_std_5", "vol_std_20", "vol_atr_14", "vol_parkinson_10", "vol_gk_20"]},
-                {"id": "liquidity", "name": "流动性", "feature_count": 12,
-                 "sample_features": ["liq_volume", "liq_amount", "liq_volume_ma_5", "liq_obv_20", "liq_mfi_14"]},
-                {"id": "technical", "name": "技术指标", "feature_count": 6,
-                 "sample_features": ["tech_bb_width", "tech_bb_pos", "tech_cci_20", "tech_adx_14", "tech_vol_price_corr_20"]},
-                {"id": "fundamental", "name": "基本面", "feature_count": 12,
-                 "sample_features": ["fun_turnover_1", "fun_mv", "fun_pe", "fun_pb", "fun_roe"]},
-                {"id": "style", "name": "风格因子", "feature_count": 9,
-                 "sample_features": ["style_beta_20", "style_idio_vol_20", "style_residual_ret_20", "style_size_20", "style_value_20"]},
-                {"id": "industry", "name": "行业因子", "feature_count": 14,
+                {"id": "volatility", "name": "波动率", "feature_count": 58,
+                 "sample_features": ["vol_std_5", "vol_std_20", "vol_atr_14", "vol_parkinson_20", "vol_gk_20"]},
+                {"id": "liquidity", "name": "成交量与流动性", "feature_count": 42,
+                 "sample_features": ["amt_net_flow_5", "amt_z_20", "amt_ratio_1_5", "amt_skew_20", "mfi_14"]},
+                {"id": "moneyflow", "name": "资金流", "feature_count": 62,
+                 "sample_features": ["amt_net_flow_20", "obv_slope_20", "amt_up_ratio_5", "amt_vol_ratio_20", "amt_high_days_10"]},
+                {"id": "style", "name": "风格因子", "feature_count": 19,
+                 "sample_features": ["style_beta_20", "style_idio_vol_20", "style_residual_ret_20", "style_beta_60", "style_idio_vol_60"]},
+                {"id": "industry", "name": "行业因子", "feature_count": 32,
                  "sample_features": ["ind_ret_5", "ind_strength_20", "ind_dispersion_20", "ind_breadth_up_20", "ind_crowding_20"]},
-                {"id": "chip", "name": "筹码", "feature_count": 9,
-                 "sample_features": ["chip_profit_ratio_20", "chip_concentration_20", "chip_peak_distance", "chip_floating_ratio", "chip_cost_90_width"]},
-                {"id": "concept", "name": "概念", "feature_count": 11,
-                 "sample_features": ["concept_hot_score", "concept_momentum_top3", "concept_exposure_top1", "concept_rotation_score", "concept_crowding_max"]},
+                {"id": "microstructure", "name": "微观结构", "feature_count": 175,
+                 "sample_features": ["amt_close_pos", "tech_close_to_high_20", "vol_amp_1", "tech_max_drawdown_20", "amt_net_flow_5"]},
+                {"id": "gtja191", "name": "GTJA Alpha191 (价量因子)", "feature_count": 16,
+                 "sample_features": ["gtja_016", "gtja_103", "gtja_158", "gtja_191", "gtja_001"]},
+                {"id": "chip", "name": "筹码分布", "feature_count": 8,
+                 "sample_features": ["chip_profit_ratio_20", "chip_concentration_20", "chip_floating_ratio", "chip_cost_90_width", "chip_profit_delta_5"]},
+                {"id": "concept", "name": "概念热度", "feature_count": 10,
+                 "sample_features": ["concept_hot_score", "concept_momentum_top3", "concept_rotation_score", "concept_crowding_max", "concept_flow_rank"]},
+                {"id": "technical", "name": "技术指标", "feature_count": 27,
+                 "sample_features": ["tech_bb_width", "tech_bb_pos", "tech_cci_20", "tech_adx_14", "tech_max_drawdown_20"]},
+                {"id": "fundamental", "name": "基本面", "feature_count": 28,
+                 "sample_features": ["fun_bp", "fun_ep", "fun_roe", "fun_peg", "fun_np_growth"]},
+                {"id": "holding", "name": "持仓结构", "feature_count": 8,
+                 "sample_features": ["fun_float_mv", "fun_total_mv", "fun_mv_rank", "style_beta_20", "ind_crowding_20"]},
+                {"id": "custom", "name": "自建因子", "feature_count": 5,
+                 "sample_features": []},
             ]
         }
 

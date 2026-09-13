@@ -27,7 +27,7 @@ import {
   healthCheck,
 } from '../services-v2/api';
 import type { BacktestStartParams } from '../services-v2/api';
-import { getDefaultMiningDirection } from '../utils-v2/miningDirections';
+import { getDefaultMiningDirection, getStoredDirectionConfig } from '../utils-v2/miningDirections';
 
 // ========================== Backtest local type ==========================
 
@@ -384,12 +384,16 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } catch {}
         }
 
+        const stored = getStoredDirectionConfig();
+        const useCustom = Boolean(config.useCustomMiningDirection);
         const direction =
-          config.useCustomMiningDirection
+          useCustom
             ? (getDefaultMiningDirection() || '价量因子挖掘')
             : (config.userInput && config.userInput.trim()) || getDefaultMiningDirection() || '价量因子挖掘';
         const resp = await apiStartMining({
           direction,
+          directions: useCustom ? stored.labels : undefined,
+          directionMode: stored.mode,
           market: config.miningMarket || 'a_share',
           universe: config.universe || defaults.defaultUniverse || 'csi300',
           dataSource: config.dataSource || 'qlib_bin',

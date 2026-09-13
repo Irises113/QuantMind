@@ -28,7 +28,8 @@ interface SystemConfig {
   defaultLibrarySuffix: string;
   // Mining direction: use selected directions / random
   miningDirectionMode: 'selected' | 'random';
-  selectedMiningDirectionIndices: number[];
+  /** 选中的挖掘方向（存 label，避免与动态 L1 类别列表下标错位） */
+  selectedMiningDirections: string[];
 }
 
 const DEFAULT_CONFIG: SystemConfig = {
@@ -45,7 +46,7 @@ const DEFAULT_CONFIG: SystemConfig = {
   backtestTimeout: 600,
   defaultLibrarySuffix: '',
   miningDirectionMode: 'selected',
-  selectedMiningDirectionIndices: [0, 1, 2],
+  selectedMiningDirections: [],
 };
 
 type SettingsTab = 'api' | 'data' | 'params' | 'directions';
@@ -114,9 +115,9 @@ export const SettingsPage: React.FC = () => {
         setConfig({
           ...DEFAULT_CONFIG,
           ...parsed,
-          selectedMiningDirectionIndices: Array.isArray(parsed.selectedMiningDirectionIndices)
-            ? parsed.selectedMiningDirectionIndices
-            : DEFAULT_CONFIG.selectedMiningDirectionIndices,
+          selectedMiningDirections: Array.isArray(parsed.selectedMiningDirections)
+            ? parsed.selectedMiningDirections.filter((l: unknown) => typeof l === 'string' && l)
+            : DEFAULT_CONFIG.selectedMiningDirections,
         });
       }
     } catch {
@@ -155,7 +156,8 @@ export const SettingsPage: React.FC = () => {
   const handleImportFeatureCatalog = async () => {
     setCatalogLoading(true);
     try {
-      const resp = await apiClient.get('/admin/models/feature-catalog');
+      // 用户态接口（非管理端），普通用户亦可读取特征字典
+      const resp = await apiClient.get('/models/feature-catalog');
       const data = resp.data?.data || resp.data;
       const catalog = data?.data || data;
       const directions = importFeatureCatalogDirections(catalog);
@@ -172,16 +174,11 @@ export const SettingsPage: React.FC = () => {
   };
 
   const addCatalogDirection = (item: MiningDirectionItem) => {
-    const existing = config.selectedMiningDirectionIndices;
-    // Find if this direction already exists in the reference list
-    let refIdx = REFERENCE_MINING_DIRECTIONS.findIndex(d => d.label === item.label);
-    // If not found, add it to the reference list
-    if (refIdx < 0) {
-      REFERENCE_MINING_DIRECTIONS.push(item);
-      refIdx = REFERENCE_MINING_DIRECTIONS.length - 1;
-    }
-    if (!existing.includes(refIdx)) {
-      updateConfigField('selectedMiningDirectionIndices', [...existing, refIdx].sort((a, b) => a - b));
+    const label = getDirectionLabel(item);
+    if (!label) return;
+    const existing = config.selectedMiningDirections;
+    if (!existing.includes(label)) {
+      updateConfigField('selectedMiningDirections', [...existing, label]);
     }
   };
 
@@ -528,7 +525,7 @@ export const SettingsPage: React.FC = () => {
                     className="w-full rounded-lg border border-input bg-background px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all"
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    单次实验同时探索的独立方向数量 (1-10)
+                    单次实验同时探索的独立方向数量 (1-10) · <span className="text-warning">后端暂未生效</span>
                   </p>
                 </div>
 
@@ -591,7 +588,7 @@ export const SettingsPage: React.FC = () => {
                     className="w-full rounded-lg border border-input bg-background px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all"
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    单次回测最大执行时间 (秒)
+                    单次回测最大执行时间 (秒) · <span className="text-warning">后端暂未生效</span>
                   </p>
                 </div>
 
@@ -612,7 +609,7 @@ export const SettingsPage: React.FC = () => {
                     <span className="text-sm text-muted-foreground font-mono">.json</span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    生成的因子将保存到此文件。支持字母、数字、下划线。
+                    生成的因子将保存到此文件。支持字母、数字、下划线。· <span className="text-warning">后端暂未生效</span>
                   </p>
                 </div>
               </div>
@@ -632,7 +629,7 @@ export const SettingsPage: React.FC = () => {
                       启用并行执行
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      允许多个挖掘方向同时运行，显著加快实验速度，但会增加系统负载
+                      允许多个挖掘方向同时运行，显著加快实验速度，但会增加系统负载 · <span className="text-warning">后端暂未生效</span>
                     </div>
                   </div>
                 </label>
@@ -649,7 +646,7 @@ export const SettingsPage: React.FC = () => {
                       启用质量门控
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      自动检测并过滤低质量因子，防止其进入下一轮迭代，保证最终结果质量
+                      自动检测并过滤低质量因子，防止其进入下一轮迭代，保证最终结果质量 · <span className="text-warning">后端暂未生效</span>
                     </div>
                   </div>
                 </label>
@@ -711,8 +708,8 @@ export const SettingsPage: React.FC = () => {
                       size="sm"
                       onClick={() => {
                         updateConfigField(
-                          'selectedMiningDirectionIndices',
-                          activeDirections.map((_: MiningDirectionItem, i: number) => i)
+                          'selectedMiningDirections',
+                          activeDirections.map((d: MiningDirectionItem) => getDirectionLabel(d))
                         );
                       }}
                     >
@@ -721,7 +718,7 @@ export const SettingsPage: React.FC = () => {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => updateConfigField('selectedMiningDirectionIndices', [])}
+                      onClick={() => updateConfigField('selectedMiningDirections', [])}
                     >
                       取消全选
                     </Button>
@@ -737,12 +734,12 @@ export const SettingsPage: React.FC = () => {
                       >
                         <input
                           type="checkbox"
-                          checked={config.selectedMiningDirectionIndices.includes(idx)}
+                          checked={config.selectedMiningDirections.includes(label)}
                           onChange={(e) => {
                             const next = e.target.checked
-                              ? [...config.selectedMiningDirectionIndices, idx].sort((a, b) => a - b)
-                              : config.selectedMiningDirectionIndices.filter((i) => i !== idx);
-                            updateConfigField('selectedMiningDirectionIndices', next);
+                              ? [...config.selectedMiningDirections, label]
+                              : config.selectedMiningDirections.filter((l) => l !== label);
+                            updateConfigField('selectedMiningDirections', next);
                           }}
                           className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                         />
@@ -754,7 +751,7 @@ export const SettingsPage: React.FC = () => {
                   })}
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  已选 {config.selectedMiningDirectionIndices.length} / {activeDirections.length} 项。
+                  已选 {config.selectedMiningDirections.length} / {activeDirections.length} 项。
                 </p>
               </div>
 
@@ -803,7 +800,7 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 )}
                 <p className="text-xs text-muted-foreground mt-2">
-                  从模型训练的 175 维特征字典中按类别导入挖掘方向
+                  从模型训练特征字典中按类别导入挖掘方向
                 </p>
               </div>
             </CardContent>
@@ -817,7 +814,7 @@ export const SettingsPage: React.FC = () => {
           <Info className="w-5 h-5 text-primary shrink-0 mt-0.5" />
           <div className="text-sm text-muted-foreground">
             <p className="mb-1 font-medium text-foreground">配置提示</p>
-            <p>所有配置修改后会自动保存至后端环境文件及本地浏览器缓存。涉及 API 或路径的修改，建议在保存后重启相关服务以确保生效。</p>
+            <p>配置修改保存在本地浏览器（localStorage）。LLM 凭证、数据路径与后端运行参数由服务器环境变量 / 个人中心统一管理，不在前端保存。</p>
           </div>
         </CardContent>
       </Card>

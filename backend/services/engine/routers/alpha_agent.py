@@ -177,6 +177,8 @@ async def start_evolution(
     universe: str = Query("csi300", description="股票池: csi300, csi500, csi1000, sse50, gem, star, csi800, all_a"),
     loop_n: int = Query(5, ge=1, le=20, description="演化轮数"),
     direction: str = Query("", description="因子挖掘方向/假设"),
+    directions: list[str] = Query(default=[], description="L1 因子类别方向列表（多选）"),
+    direction_mode: str = Query("selected", description="类别选择模式: selected=取第一条, random=随机一条"),
     data_source: str = Query("", description="数据源: qlib_bin, parquet, pg (留空使用默认)"),
 ):
     """启动因子演化任务"""
@@ -214,6 +216,19 @@ async def start_evolution(
             "或在服务器 .env 配置 DEEPSEEK_API_KEY / AI_IDE_LLM_API_KEY / OPENAI_API_KEY。",
         )
     logger.info("[alpha-agent] evolve llm source=%s model=%s", llm_source, llm_config.model)
+
+    # 类别方向下发：前端传多选类别 + 模式，服务端解析成单条 direction
+    clean_dirs = [d.strip() for d in directions if isinstance(d, str) and d.strip()]
+    if clean_dirs:
+        import random as _random
+
+        direction = (
+            _random.choice(clean_dirs) if direction_mode == "random" else clean_dirs[0]
+        )
+        logger.info(
+            "[alpha-agent] evolve directions=%d mode=%s -> %s",
+            len(clean_dirs), direction_mode, direction,
+        )
 
     launcher = get_launcher()
     # 并发上限：每个任务是 RD-Agent 子进程（烧 LLM token + Qlib 回测），

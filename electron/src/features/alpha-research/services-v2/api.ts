@@ -183,6 +183,10 @@ export interface MiningStartParams {
   librarySuffix?: string;
   qualityGateEnabled?: boolean;
   parallelEnabled?: boolean;
+  /** L1 因子类别方向（多选，label） */
+  directions?: string[];
+  /** 类别选择模式：selected=取第一条，random=随机一条 */
+  directionMode?: 'selected' | 'random';
 }
 
 export async function startMining(
@@ -196,6 +200,10 @@ export async function startMining(
   if (params.market) qs.set('market', params.market);
   if (params.universe) qs.set('universe', params.universe);
   if (params.dataSource) qs.set('data_source', params.dataSource);
+  for (const d of params.directions ?? []) {
+    if (d && d.trim()) qs.append('directions', d.trim());
+  }
+  if (params.directionMode) qs.set('direction_mode', params.directionMode);
   const res = await apiClient.post(`/alpha-agent/evolve?${qs.toString()}`);
   const data = res.data?.data ?? {};
   const taskId: string = data.task_id ?? '';

@@ -48,29 +48,45 @@ export function getDirectionLabel(item: MiningDirectionItem): string {
 
 interface StoredMiningDirectionConfig {
   miningDirectionMode?: 'selected' | 'random';
-  selectedMiningDirectionIndices?: number[];
+  /** 选中的挖掘方向（存 label，避免与动态 L1 类别列表下标错位） */
+  selectedMiningDirections?: string[];
+}
+
+/** 读取本地保存的挖掘方向选择（label 列表 + 模式） */
+export function getStoredDirectionConfig(): {
+  labels: string[];
+  mode: 'selected' | 'random';
+} {
+  try {
+    const raw = localStorage.getItem('quantaalpha_config');
+    if (!raw) return { labels: [], mode: 'selected' };
+    const config = JSON.parse(raw) as StoredMiningDirectionConfig;
+    return {
+      labels: Array.isArray(config?.selectedMiningDirections)
+        ? config.selectedMiningDirections.filter((l) => typeof l === 'string' && l.trim())
+        : [],
+      mode: config?.miningDirectionMode === 'random' ? 'random' : 'selected',
+    };
+  } catch {
+    return { labels: [], mode: 'selected' };
+  }
 }
 
 /** Get a default mining direction from saved config (one of the selected list, or a random one) */
 export function getDefaultMiningDirection(
-  list: MiningDirectionItem[] = REFERENCE_MINING_DIRECTIONS,
+  list?: MiningDirectionItem[],
 ): string {
-  try {
-    const raw = localStorage.getItem('quantaalpha_config');
-    if (!raw) return '';
-    const config = JSON.parse(raw) as StoredMiningDirectionConfig;
-    const indices = config?.selectedMiningDirectionIndices ?? [];
-    if (!list.length || !indices.length) return '';
-    const validIndices = indices.filter((i) => i >= 0 && i < list.length);
-    if (!validIndices.length) return '';
-    if (config?.miningDirectionMode === 'random') {
-      const idx = validIndices[Math.floor(Math.random() * validIndices.length)];
-      return getDirectionLabel(list[idx]);
-    }
-    return getDirectionLabel(list[validIndices[0]]);
-  } catch {
-    return '';
+  const { labels, mode } = getStoredDirectionConfig();
+  if (!labels.length) return '';
+  let usable = labels;
+  if (list && list.length) {
+    const valid = new Set(list.map(getDirectionLabel));
+    usable = labels.filter((l) => valid.has(l));
   }
+  if (!usable.length) return '';
+  return mode === 'random'
+    ? usable[Math.floor(Math.random() * usable.length)]
+    : usable[0];
 }
 
 /** Feature catalog category structure */
