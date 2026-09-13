@@ -67,6 +67,29 @@ def test_lag_signal_frame_moves_signal_to_next_trade_date():
     assert lagged.loc[(pd.Timestamp("2025-01-06"), "SH600000"), "score"] == 2.0
 
 
+def test_materialize_signal_dataframe_applies_full_lag_once_for_vectorized():
+    """向量化引擎无 qlib 的 shift=1，因此这里必须应用完整 lag_days（一次）。"""
+    import pandas as pd
+
+    service = QlibBacktestService()
+    idx = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2025-01-02"), "SH600000"),
+            (pd.Timestamp("2025-01-03"), "SH600000"),
+            (pd.Timestamp("2025-01-06"), "SH600000"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    df = pd.DataFrame({"score": [1.0, 2.0, 3.0]}, index=idx)
+    request = types.SimpleNamespace(signal_lag_days=1)
+
+    out = service._materialize_signal_dataframe(df, request)
+
+    assert (pd.Timestamp("2025-01-02"), "SH600000") not in out.index
+    assert out.loc[(pd.Timestamp("2025-01-03"), "SH600000"), "score"] == 1.0
+    assert out.loc[(pd.Timestamp("2025-01-06"), "SH600000"), "score"] == 2.0
+
+
 def test_build_pred_signal_meta_uses_lagged_effective_dates():
     import pandas as pd
 

@@ -34,11 +34,18 @@ class SimpleSignal(Signal):
         universe: str = "all",
         pred_path: str | None = None,
         signal_lag_days: int = 1,
+        qlib_signal_shift_days: int = 1,
     ):
         self.metric = metric
         self.universe = universe
         self._pred_path = pred_path
         self.signal_lag_days = max(0, int(signal_lag_days or 0))
+        # qlib 原生策略（TopkDropoutStrategy / WeightStrategyBase）取信号时固定用
+        # ``trade_calendar.get_step_time(step, shift=1)`` 取上一根 bar，已经实现了
+        # 一天滞后（T-1 信号 → T 成交）。本适配器只应补足剩余天数
+        # ``signal_lag_days - qlib_signal_shift_days``，否则滞后会被算两遍
+        # （历史 bug：默认 lag=1 被应用两次，实际用 T-2 信号在 T 成交）。
+        self.qlib_signal_shift_days = max(0, int(qlib_signal_shift_days or 0))
         self._pred_series: pd.Series | None = None
         self._universe_codes: set[str] | None = None
         self._daily_cache: dict[pd.Timestamp, pd.Series] = {}
@@ -137,15 +144,21 @@ class SimpleSignal(Signal):
             series.index = series.index.set_names(["datetime", "instrument"])
         return series.sort_index()
 
+    @property
+    def _effective_lag_days(self) -> int:
+        """本适配器需要补足的滞后天数（已扣除 qlib 策略自带的 shift）。"""
+        return max(0, self.signal_lag_days - self.qlib_signal_shift_days)
+
     def _lag_series_by_trading_days(self, series: pd.Series) -> pd.Series:
-        if self.signal_lag_days <= 0 or series.empty:
+        lag_days = self._effective_lag_days
+        if lag_days <= 0 or series.empty:
             return series
         if not isinstance(series.index, pd.MultiIndex) or "datetime" not in series.index.names:
             return series
 
         date_values = pd.to_datetime(series.index.get_level_values("datetime")).normalize()
         unique_dates = pd.Index(date_values.unique()).sort_values()
-        shifted_dates = unique_dates.to_series(index=unique_dates).shift(-self.signal_lag_days)
+        shifted_dates = unique_dates.to_series(index=unique_dates).shift(-lag_days)
         mapped_dates = date_values.map(shifted_dates)
         valid_mask = ~pd.isna(mapped_dates)
         if not valid_mask.any():
@@ -433,8 +446,9 @@ class SimpleSignal(Signal):
                 task_logger.warning("universe_empty_return_blank", "Universe 股票池为空，返回空信号", universe=self.universe)
                 return pd.Series(dtype=float)
             query_start = start_time
-            if self.signal_lag_days > 0 and start_time is not None:
-                query_start = pd.to_datetime(start_time) - pd.Timedelta(days=max(10, self.signal_lag_days * 10))
+            lag_days = self._effective_lag_days
+            if lag_days > 0 and start_time is not None:
+                query_start = pd.to_datetime(start_time) - pd.Timedelta(days=max(10, lag_days * 10))
             df = D.features(instruments, [self.metric], start_time=query_start, end_time=end_time)
             if df is not None and not df.empty:
                 series = df[self.metric]

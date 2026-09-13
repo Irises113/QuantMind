@@ -566,7 +566,20 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                     or curr_signal == "<PRED>"
                     or (isinstance(curr_signal, str) and curr_signal.startswith("$"))
                 ) and signal_data is not None:
-                    strategy["kwargs"]["signal"] = signal_data
+                    strategy_signal = signal_data
+                    if isinstance(strategy_signal, (pd.DataFrame, pd.Series)):
+                        # step 引擎：qlib 策略已用 get_step_time(step, shift=1) 实现一天滞后，
+                        # 信号层只补剩余 (signal_lag_days - 1) 天，避免双重滞后。
+                        # 向量化引擎不经过这里（走 _materialize_signal_dataframe 完整滞后）。
+                        residual_lag = max(
+                            0, int(getattr(request, "signal_lag_days", 1) or 0) - 1
+                        )
+                        if residual_lag > 0:
+                            strategy_signal = self._lag_signal_frame(
+                                strategy_signal, residual_lag
+                            )
+                    # list 信号（多信号）原样透传，保持既有行为
+                    strategy["kwargs"]["signal"] = strategy_signal
 
                 # --- 信号实例化保障 [START] ---
                 # qlib create_signal_from() 不接受 dict 类型，必须在此统一实例化。
@@ -1376,9 +1389,14 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
         """
         lag_days = int(getattr(request, "signal_lag_days", 1) or 0)
         if isinstance(signal_data, pd.Series):
-            return signal_data.to_frame("score")
+            frame = signal_data.to_frame("score")
+            return self._lag_signal_frame(frame, lag_days) if lag_days > 0 else frame
         if isinstance(signal_data, pd.DataFrame):
-            return signal_data
+            return (
+                self._lag_signal_frame(signal_data, lag_days)
+                if lag_days > 0
+                else signal_data
+            )
         if isinstance(signal_data, dict):
             pred_path = (signal_data.get("kwargs") or {}).get("pred_path")
             if pred_path and os.path.exists(pred_path):
@@ -1917,7 +1935,10 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
             if df is None or df.empty:
                 raise ValueError("signal data is empty")
             lag_days = int(getattr(request, "signal_lag_days", 1) or 0)
-            df = self._lag_signal_frame(df, lag_days)
+            # 注意：这里返回「未滞后」的特征信号，滞后由引擎各自补齐——
+            # step 引擎由 qlib 策略的 shift=1 + SimpleSignal 残差实现，
+            # 向量化引擎由 _materialize_signal_dataframe 一次性应用完整 lag_days。
+            # 若在此处预先滞后，step 路径会与 qlib 的 shift 叠加成双重滞后。
             return df, {
                 "source": "feature_field",
                 "feature": feature,
