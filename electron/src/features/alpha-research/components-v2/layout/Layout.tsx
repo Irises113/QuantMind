@@ -1,6 +1,5 @@
 import React from 'react';
 import { Sparkles, Database, BarChart3, Settings as SettingsIcon } from 'lucide-react';
-import { useTaskContext } from '../../context-v2/TaskContext';
 
 export type PageId = 'home' | 'library' | 'backtest' | 'settings' | 'mining_dashboard';
 
@@ -17,19 +16,10 @@ export const Layout: React.FC<LayoutProps> = ({
   onNavigate,
   showNavigation = true,
 }) => {
-  const { miningTask } = useTaskContext();
-
-  // Helper to determine where 'Factor Mining' nav item should go
+  // 导航一律直达目标页：进度台由「开始挖掘后的自动跳转」或首页「查看演化台」进入，
+  // 不能因为存在历史/运行中任务就把「因子挖掘」强制带到进度页。
   const handleNavClick = (itemId: PageId) => {
-    if (itemId === 'home') {
-      if (miningTask && miningTask.status !== 'idle') {
-        onNavigate('mining_dashboard');
-      } else {
-        onNavigate('home');
-      }
-    } else {
-      onNavigate(itemId);
-    }
+    onNavigate(itemId);
   };
 
   const navItems = [
