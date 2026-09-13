@@ -39,7 +39,7 @@ def _env_or(key: str, default: str) -> str:
 _PASSWORD_FIELD = "ssh_password"
 _KEY_FIELD = "ssh_key"
 _PUBLIC_FIELDS = (
-    "id", "name", "host", "port", "user", "work_dir", "docker_image", "gpus",
+    "id", "name", "host", "port", "user", "work_dir", "docker_image", "gpus", "exec_mode",
 )
 
 
@@ -105,6 +105,7 @@ def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
         key = str(node.get(_KEY_FIELD) or "").strip()
         if not pwd and not key:
             raise ValueError("新增节点必须提供 ssh_password 或 ssh_key 之一")
+        exec_mode = str(node.get("exec_mode") or "").strip() or "ssh_docker"
         nodes.append({
             "id": node_id,
             "name": str(node.get("name") or node_id).strip(),
@@ -116,6 +117,7 @@ def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
             "work_dir": str(node.get("work_dir") or "/workspace").strip(),
             "docker_image": str(node.get("docker_image") or "quantmind-oss:latest").strip(),
             "gpus": str(node.get("gpus") or "all").strip(),
+            "exec_mode": exec_mode,
         })
     else:
         existing["name"] = str(node.get("name") or existing.get("name") or node_id).strip()
@@ -127,6 +129,8 @@ def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
             node.get("docker_image") or existing.get("docker_image") or "quantmind-oss:latest"
         ).strip()
         existing["gpus"] = str(node.get("gpus") or existing.get("gpus") or "all").strip()
+        if node.get("exec_mode"):
+            existing["exec_mode"] = str(node["exec_mode"]).strip()
         # 密码/密钥留空 = 保持不变
         if node.get(_PASSWORD_FIELD):
             existing[_PASSWORD_FIELD] = str(node[_PASSWORD_FIELD]).strip()
@@ -202,6 +206,7 @@ def load_training_nodes() -> list[dict[str, Any]]:
         "work_dir": _env_or("TRAINING_AUTODL_WORK_DIR", "/workspace"),
         "docker_image": _env_or("TRAINING_AUTODL_DOCKER_IMAGE", "quantmind-oss:latest"),
         "gpus": _env_or("TRAINING_AUTODL_GPUS", "all"),
+        "exec_mode": _env_or("TRAINING_AUTODL_EXEC_MODE", "ssh_docker"),
     }]
 
 
