@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Button, Spin, Modal, Form, Input, InputNumber, message, Select, Tag, Tooltip, Popconfirm, Empty } from 'antd';
-import { Server, Plus, Trash2, Pencil, PlugZap, Activity, RefreshCw, Cpu, HardDrive, MemoryStick } from 'lucide-react';
+import { Server, Plus, Trash2, Pencil, PlugZap, Activity, Cpu, HardDrive, MemoryStick } from 'lucide-react';
 import { adminService } from '../../admin/services/adminService';
+import { parseSshSnippet, suggestAutodlNodeId } from '../utils/parseSshSnippet';
 
 interface CloudNodeInfo {
   id: string;
@@ -21,6 +22,8 @@ interface CloudNodeDetail {
   work_dir?: string;
   docker_image?: string;
   gpus?: string;
+  exec_mode?: string;
+  quantdb_dir?: string;
   has_password?: boolean;
   has_key?: boolean;
 }
@@ -41,6 +44,7 @@ interface NodeStatusData {
 }
 
 interface NodeFormValues {
+  id?: string;
   name: string;
   host: string;
   port: number;
@@ -48,13 +52,16 @@ interface NodeFormValues {
   ssh_password?: string;
   ssh_key?: string;
   work_dir: string;
-  docker_image: string;
+  docker_image?: string;
   gpus: string;
+  exec_mode: 'native_python' | 'ssh_docker';
+  quantdb_dir: string;
 }
 
 const ENV = (import.meta as any).env || {};
 
 const DEFAULT_FORM: NodeFormValues = {
+  id: '',
   name: ENV.VITE_AUTODL_DEFAULT_NAME || '',
   host: ENV.VITE_AUTODL_DEFAULT_HOST || '',
   port: ENV.VITE_AUTODL_DEFAULT_PORT ? Number(ENV.VITE_AUTODL_DEFAULT_PORT) : 22,
@@ -62,8 +69,10 @@ const DEFAULT_FORM: NodeFormValues = {
   ssh_password: '',
   ssh_key: '',
   work_dir: ENV.VITE_AUTODL_DEFAULT_WORK_DIR || '/root/workspace',
-  docker_image: 'quantmind-train:latest',
+  docker_image: '',
   gpus: 'all',
+  exec_mode: 'native_python',
+  quantdb_dir: '/root/autodl-fs/quantdb',
 };
 
 export const CloudNodeSettings: React.FC = () => {
@@ -74,7 +83,10 @@ export const CloudNodeSettings: React.FC = () => {
   const [statusMap, setStatusMap] = useState<Record<string, NodeStatusData>>({});
   const [testingId, setTestingId] = useState<string | null>(null);
   const [statusLoadingId, setStatusLoadingId] = useState<string | null>(null);
+  const [sshPaste, setSshPaste] = useState('');
+  const [idTouched, setIdTouched] = useState(false);
   const [form] = Form.useForm<NodeFormValues>();
+  const execMode = Form.useWatch('exec_mode', form);
 
   const loadNodes = useCallback(async () => {
     setIsLoading(true);
@@ -93,31 +105,63 @@ export const CloudNodeSettings: React.FC = () => {
     void loadNodes();
   }, [loadNodes]);
 
+  const applySshPaste = (raw: string, opts?: { notify?: boolean }) => {
+    setSshPaste(raw);
+    const parsed = parseSshSnippet(raw);
+    if (!parsed.host && !parsed.port && !parsed.user && !parsed.ssh_password && !parsed.ssh_key) {
+      return;
+    }
+    const patch: Partial<NodeFormValues> = {};
+    if (parsed.host) patch.host = parsed.host;
+    if (parsed.port) patch.port = parsed.port;
+    if (parsed.user) patch.user = parsed.user;
+    if (parsed.ssh_password) patch.ssh_password = parsed.ssh_password;
+    if (parsed.ssh_key) patch.ssh_key = parsed.ssh_key;
+    const name = form.getFieldValue('name');
+    if (!name && parsed.host) {
+      patch.name = parsed.host.split('.')[0] || parsed.host;
+    }
+    if (!editingId && !idTouched) {
+      patch.id = suggestAutodlNodeId(String(name || patch.name || parsed.host || ''));
+    }
+    form.setFieldsValue(patch);
+    if (opts?.notify) {
+      message.success('已从粘贴内容解析 SSH 连接信息');
+    }
+  };
+
   const openCreate = () => {
     setEditingId(null);
+    setIdTouched(false);
+    setSshPaste('');
     form.setFieldsValue(DEFAULT_FORM);
     setIsModalOpen(true);
   };
 
   const openEdit = async (node: CloudNodeInfo) => {
     setEditingId(node.id);
+    setIdTouched(true);
+    setSshPaste('');
     try {
       const resp = await adminService.getTrainingNodeDetail(node.id);
       if (resp?.success && resp.node) {
         const d: CloudNodeDetail = resp.node;
         form.setFieldsValue({
+          id: d.id,
           name: d.name || '',
           host: d.host || '',
           port: d.port || 22,
           user: d.user || 'root',
           ssh_password: '',
           ssh_key: '',
-          work_dir: d.work_dir || '/workspace',
-          docker_image: d.docker_image || 'quantmind-train:latest',
+          work_dir: d.work_dir || '/root/workspace',
+          docker_image: d.docker_image || '',
           gpus: d.gpus || 'all',
+          exec_mode: d.exec_mode === 'ssh_docker' ? 'ssh_docker' : 'native_python',
+          quantdb_dir: d.quantdb_dir || '/root/autodl-fs/quantdb',
         });
       } else {
-        form.setFieldsValue({ ...DEFAULT_FORM, name: node.name || '', host: node.host || '' });
+        form.setFieldsValue({ ...DEFAULT_FORM, name: node.name || '', host: node.host || '', id: node.id });
       }
       setIsModalOpen(true);
     } catch (error: any) {
@@ -128,17 +172,24 @@ export const CloudNodeSettings: React.FC = () => {
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
+      const nodeId = editingId || suggestAutodlNodeId(values.id || values.name || values.host);
+      if (!values.ssh_password && !values.ssh_key && !editingId) {
+        message.error('请填写 SSH 密码或密钥路径');
+        return;
+      }
       const payload = {
-        id: editingId,
-        name: values.name,
+        id: nodeId,
+        name: values.name || nodeId,
         host: values.host,
         port: values.port,
         user: values.user,
         ssh_password: values.ssh_password || undefined,
         ssh_key: values.ssh_key || undefined,
         work_dir: values.work_dir,
-        docker_image: values.docker_image,
+        docker_image: values.exec_mode === 'native_python' ? '' : (values.docker_image || ''),
         gpus: values.gpus,
+        exec_mode: values.exec_mode,
+        quantdb_dir: values.quantdb_dir,
       };
       const resp = await adminService.saveTrainingNode(payload);
       if (resp?.success) {
@@ -172,9 +223,14 @@ export const CloudNodeSettings: React.FC = () => {
     setTestingId(nodeId);
     try {
       const resp = await adminService.testTrainingNode(nodeId);
-      if (resp?.success) {
-        const ok = resp.ssh && resp.docker;
-        message.success(ok ? `节点 ${nodeId} SSH 与 Docker 均可用` : `节点 SSH=${!!resp.ssh} Docker=${!!resp.docker}`);
+      if (resp?.success && resp.ssh) {
+        if (resp.exec_mode === 'native_python' || resp.native_python) {
+          message.success(`节点 ${nodeId} SSH 可用（免 Docker）`);
+        } else if (resp.docker) {
+          message.success(`节点 ${nodeId} SSH 与 Docker 均可用`);
+        } else {
+          message.warning(`节点 ${nodeId} SSH 可用，但 Docker 不可用（免 Docker 节点可忽略）`);
+        }
       } else {
         message.error(resp?.error || '测试连接失败');
       }
@@ -256,7 +312,7 @@ export const CloudNodeSettings: React.FC = () => {
               </div>
               <div>
                 <h3 className="text-sm font-semibold text-gray-800">云端节点</h3>
-                <p className="text-[11px] text-gray-500">配置 AutoDL 远程 GPU 训练节点，用于模型训练</p>
+                <p className="text-[11px] text-gray-500">配置 AutoDL 远程 GPU 训练节点（默认免 Docker）</p>
               </div>
             </div>
             <Button type="primary" size="small" icon={<Plus className="w-3.5 h-3.5" />} onClick={openCreate} className="!rounded-[8px]">
@@ -265,7 +321,7 @@ export const CloudNodeSettings: React.FC = () => {
           </div>
 
           {nodes.length === 0 ? (
-            <Empty description="暂无云端节点，点击「新建节点」添加 AutoDL 节点" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            <Empty description="暂无云端节点，点击「新建节点」粘贴 SSH 命令即可" image={Empty.PRESENTED_IMAGE_SIMPLE} />
           ) : (
             <div className="space-y-3">
               {nodes.map((node) => (
@@ -311,19 +367,15 @@ export const CloudNodeSettings: React.FC = () => {
                     </div>
                   </div>
                   <div>{renderStatus(node)}</div>
-                  <div className="flex items-center gap-3 text-[11px] text-gray-400 flex-wrap">
-                    <span>用户: {node.id ? '见详情' : ''}</span>
-                    <span>镜像: {statusMap[node.id]?.gpus ? '—' : ''}</span>
-                  </div>
                 </div>
               ))}
             </div>
           )}
 
           <div className="text-[11px] text-gray-400 space-y-0.5 pt-1 border-t border-gray-100">
-            <p>• 节点配置保存在服务器 config/training_nodes.yaml，重启后仍生效</p>
-            <p>• SSH 密码仅保存到服务端，前端不显示明文；留空表示保持原值</p>
-            <p>• 使用 GPU 需节点安装 nvidia-container-toolkit，gpus 支持 all / 数字 / 0(CPU)</p>
+            <p>• 可直接粘贴 AutoDL 控制台的 ssh 命令（含端口、账号），密码可写在下一行</p>
+            <p>• 默认免 Docker：不需要训练镜像。节点配置保存在服务器 training_nodes.yaml</p>
+            <p>• SSH 密码只存在服务端，编辑时留空表示保持原值</p>
           </div>
         </div>
       </div>
@@ -335,39 +387,87 @@ export const CloudNodeSettings: React.FC = () => {
         onCancel={() => setIsModalOpen(false)}
         okText="保存"
         cancelText="取消"
-        width={520}
+        width={560}
         destroyOnHidden
       >
         <Form form={form} layout="vertical" initialValues={DEFAULT_FORM} className="!pt-2">
+          <div className="mb-3">
+            <div className="text-xs text-gray-500 mb-1">粘贴 SSH 命令（自动解析地址 / 端口 / 用户 / 密码）</div>
+            <Input.TextArea
+              value={sshPaste}
+              rows={3}
+              placeholder={'ssh -p 27045 root@connect.bjb2.seetacloud.com\n密码 xxxxxxxx'}
+              className="!rounded-[8px]"
+              onChange={(e) => applySshPaste(e.target.value)}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData('text');
+                if (text) {
+                  window.setTimeout(() => applySshPaste(text, { notify: true }), 0);
+                }
+              }}
+            />
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Form.Item name="name" label="节点名称" rules={[{ required: true, message: '请输入节点名称' }]}>
-              <Input placeholder="如 AutoDL A100" className="!h-8 !rounded-[8px]" />
+              <Input
+                placeholder="如 autodl4090"
+                className="!h-8 !rounded-[8px]"
+                onChange={(e) => {
+                  if (!editingId && !idTouched) {
+                    form.setFieldValue('id', suggestAutodlNodeId(e.target.value || form.getFieldValue('host') || ''));
+                  }
+                }}
+              />
             </Form.Item>
-            <Form.Item name="host" label="节点地址" rules={[{ required: true, message: '请输入 IP/域名' }]}>
-              <Input placeholder="如 192.168.31.66" className="!h-8 !rounded-[8px]" />
+            <Form.Item
+              name="id"
+              label="节点 ID"
+              extra="须以 autodl 开头，训练页靠它调度"
+              rules={[{ required: !editingId, message: '请填写节点 ID' }]}
+            >
+              <Input
+                disabled={!!editingId}
+                placeholder="autodl-4090"
+                className="!h-8 !rounded-[8px]"
+                onChange={() => setIdTouched(true)}
+              />
             </Form.Item>
           </div>
           <div className="grid grid-cols-2 gap-3">
+            <Form.Item name="host" label="节点地址" rules={[{ required: true, message: '请输入 IP/域名' }]}>
+              <Input placeholder="connect.xxx.seetacloud.com" className="!h-8 !rounded-[8px]" />
+            </Form.Item>
             <Form.Item name="port" label="SSH 端口" rules={[{ required: true, message: '请输入端口' }]}>
               <InputNumber min={1} max={65535} className="!w-full !h-8 !rounded-[8px]" placeholder="22" />
             </Form.Item>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <Form.Item name="user" label="SSH 用户" rules={[{ required: true, message: '请输入用户' }]}>
-              <Input placeholder="如 root" className="!h-8 !rounded-[8px]" />
+              <Input placeholder="root" className="!h-8 !rounded-[8px]" />
+            </Form.Item>
+            <Form.Item name="exec_mode" label="执行模式">
+              <Select
+                className="[&_.ant-select-selector]:!h-8 [&_.ant-select-selector]:!rounded-[8px] [&_.ant-select-selector]:!items-center"
+                options={[
+                  { value: 'native_python', label: '免 Docker（AutoDL 推荐）' },
+                  { value: 'ssh_docker', label: '远端 Docker 镜像' },
+                ]}
+              />
             </Form.Item>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Form.Item name="ssh_password" label="SSH 密码" extra={editingId ? '留空表示保持原值' : undefined}>
+            <Form.Item name="ssh_password" label="SSH 密码" extra={editingId ? '留空表示保持原值' : '可与 ssh 命令一起粘贴'}>
               <Input.Password placeholder="密码或留空" className="!h-8 !rounded-[8px]" />
             </Form.Item>
-            <Form.Item name="ssh_key" label="SSH 密钥路径" extra={editingId ? '留空表示保持原值' : undefined}>
-              <Input placeholder="/path/to/key 或留空" className="!h-8 !rounded-[8px]" />
+            <Form.Item name="ssh_key" label="SSH 密钥路径" extra="填主节点容器内路径，一般留空用密码">
+              <Input placeholder="可选" className="!h-8 !rounded-[8px]" />
             </Form.Item>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <Form.Item name="work_dir" label="远端工作目录">
-              <Input placeholder="/workspace" className="!h-8 !rounded-[8px]" />
+              <Input placeholder="/root/workspace" className="!h-8 !rounded-[8px]" />
             </Form.Item>
-            <Form.Item name="gpus" label="GPU 挂载">
+            <Form.Item name="gpus" label="GPU">
               <Select
                 className="[&_.ant-select-selector]:!h-8 [&_.ant-select-selector]:!rounded-[8px] [&_.ant-select-selector]:!items-center"
                 options={[
@@ -379,9 +479,18 @@ export const CloudNodeSettings: React.FC = () => {
               />
             </Form.Item>
           </div>
-          <Form.Item name="docker_image" label="训练镜像">
-            <Input placeholder="quantmind-train:latest" className="!h-8 !rounded-[8px]" />
+          <Form.Item
+            name="quantdb_dir"
+            label="QuantDB 数据目录"
+            extra="AutoDL 数据盘，重启不丢"
+          >
+            <Input placeholder="/root/autodl-fs/quantdb" className="!h-8 !rounded-[8px]" />
           </Form.Item>
+          {execMode === 'ssh_docker' && (
+            <Form.Item name="docker_image" label="训练镜像" extra="仅远端 Docker 模式需要">
+              <Input placeholder="quantmind-train:latest" className="!h-8 !rounded-[8px]" />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </div>

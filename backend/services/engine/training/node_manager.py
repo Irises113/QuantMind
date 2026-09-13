@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,31 @@ def _sanitize_node_for_output(node: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _normalize_node_id(raw: str) -> str:
+    """训练调度要求 id 以 autodl 开头；名称 autodl4090 可直接当 id。"""
+    slug = re.sub(r"[^a-z0-9]+", "-", (raw or "").strip().lower()).strip("-")
+    if not slug:
+        return ""
+    if slug.startswith("autodl"):
+        return slug
+    return f"autodl-{slug}"
+
+
+def _default_exec_mode(node: dict[str, Any]) -> str:
+    mode = str(node.get("exec_mode") or "").strip()
+    if mode in ("native_python", "ssh_docker"):
+        return mode
+    image = str(node.get("docker_image") or "").strip()
+    return "ssh_docker" if image else "native_python"
+
+
+def _default_quantdb_dir(node: dict[str, Any], exec_mode: str) -> str:
+    qd = str(node.get("quantdb_dir") or "").strip()
+    if qd:
+        return qd
+    return "/root/autodl-fs/quantdb" if exec_mode == "native_python" else "/data/quantdb"
+
+
 def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
     """新增或更新一个训练节点。
 
@@ -88,9 +114,9 @@ def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
     - ssh_password / ssh_key 为空字符串时表示"保持不变"（不回显明文）。
     - 校验：id/host/user/port 必填，密码与 key 至少其一（首次创建时）。
     """
-    node_id = str(node.get("id") or "").strip()
+    node_id = _normalize_node_id(str(node.get("id") or node.get("name") or "").strip())
     if not node_id:
-        raise ValueError("节点 id 不能为空")
+        raise ValueError("节点 id 不能为空（需以 autodl 开头，或填写名称以便自动生成）")
     host = str(node.get("host") or "").strip()
     if not host:
         raise ValueError("节点 host 不能为空")
@@ -106,7 +132,7 @@ def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
         key = str(node.get(_KEY_FIELD) or "").strip()
         if not pwd and not key:
             raise ValueError("新增节点必须提供 ssh_password 或 ssh_key 之一")
-        exec_mode = str(node.get("exec_mode") or "").strip() or "ssh_docker"
+        exec_mode = _default_exec_mode(node)
         nodes.append({
             "id": node_id,
             "name": str(node.get("name") or node_id).strip(),
@@ -115,25 +141,27 @@ def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
             "user": user,
             _PASSWORD_FIELD: pwd,
             _KEY_FIELD: key,
-            "work_dir": str(node.get("work_dir") or "/workspace").strip(),
-            "docker_image": str(node.get("docker_image") or "quantmind-oss:latest").strip(),
+            "work_dir": str(node.get("work_dir") or "/root/workspace").strip(),
+            "docker_image": str(node.get("docker_image") or "").strip(),
             "gpus": str(node.get("gpus") or "all").strip(),
             "exec_mode": exec_mode,
-            "quantdb_dir": str(node.get("quantdb_dir") or "").strip() or "/data/quantdb",
+            "quantdb_dir": _default_quantdb_dir(node, exec_mode),
         })
     else:
         existing["name"] = str(node.get("name") or existing.get("name") or node_id).strip()
         existing["host"] = host
         existing["port"] = int(node.get("port") or existing.get("port") or 22)
         existing["user"] = str(node.get("user") or existing.get("user") or "root").strip()
-        existing["work_dir"] = str(node.get("work_dir") or existing.get("work_dir") or "/workspace").strip()
+        existing["work_dir"] = str(node.get("work_dir") or existing.get("work_dir") or "/root/workspace").strip()
         existing["docker_image"] = str(
-            node.get("docker_image") or existing.get("docker_image") or "quantmind-oss:latest"
+            node.get("docker_image") if node.get("docker_image") is not None else existing.get("docker_image") or ""
         ).strip()
         existing["gpus"] = str(node.get("gpus") or existing.get("gpus") or "all").strip()
-        existing["quantdb_dir"] = str(node.get("quantdb_dir") or existing.get("quantdb_dir") or "/data/quantdb").strip()
-        if node.get("exec_mode"):
-            existing["exec_mode"] = str(node["exec_mode"]).strip()
+        if node.get("exec_mode") or node.get("docker_image") is not None:
+            existing["exec_mode"] = _default_exec_mode({**existing, **node})
+        existing["quantdb_dir"] = _default_quantdb_dir(
+            {**existing, **node}, str(existing.get("exec_mode") or "native_python")
+        )
         # 密码/密钥留空 = 保持不变
         if node.get(_PASSWORD_FIELD):
             existing[_PASSWORD_FIELD] = str(node[_PASSWORD_FIELD]).strip()

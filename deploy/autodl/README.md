@@ -14,52 +14,82 @@ AutoDL 显卡实例默认是 Python 容器（有 torch + GPU，但**没有 docke
 > AutoDL 自定义镜像**不能跨账户共享**，因此不采用「固化镜像」交付，改用「节点现场安装依赖」。
 > 代码（train.py / training 包 / backend 直读子树）不入镜像，由编排器每次 rsync 流式推送。
 
-## 快速开始（新机器部署步骤）
+## 快速开始
 
-1. **开通 AutoDL 实例**，选择带 GPU + Python 的镜像（如 PyTorch 基础镜像）。
-2. **SSH 登录 AutoDL 终端**（用 SSH 软件，如 XShell / PuTTY / 终端）：
+1. 开通带 GPU 的 AutoDL Python 实例，SSH 登录：
    ```bash
    ssh -p <端口> root@connect.xxx.seetacloud.com
    ```
-3. **上传并运行初始化脚本**（在 AutoDL 本机执行，不是主节点）：
-   ```bash
-   bash setup-autodl-native.sh
-   ```
-   脚本会交互式完成：
-   - 检测 Python / GPU
-   - 安装训练依赖（lightgbm / xgboost / catboost / pyqlib / duckdb / quantdb-sdk 等，幂等）
-   - 创建目录：工作区 `/root/workspace`、数据盘 `/root/autodl-fs/quantdb`
-   - 交互式填写 `QUANTDB_API_KEY` 并写入环境变量
-   - 询问是否自动下载近 3 年训练数据集（或跳过走离线上传）
-4. **把脚本分发到新机器**：新机器只需能拿到这个脚本（已提交 git，`git pull` 或 scp 即可）。
+2. 上传并执行 `setup-autodl-native.sh`（在 AutoDL 本机跑，不是主节点）。
 
-## 数据集准备
+交互：
 
-训练直读 QuantDB 因子 parquet，数据放 **AutoDL 数据盘** `/root/autodl-fs/quantdb`（持久，重启不丢；系统盘 `/` 重启会清）。
+```bash
+bash setup-autodl-native.sh
+```
 
-- **自动下载**：脚本内选择 `Y`，调 quantdb-sdk 增量同步近 3 年 `l1_factors/l2_factors/l1_l2_factors` 到数据盘。
-- **离线方式**：在其他机器同步好 `6_ml_datasets/` 后上传到指定目录：
-  ```
-  /root/autodl-fs/quantdb/6_ml_datasets/
-  ```
+非交互（无 TTY / CI / 远程一条命令）：
+
+```bash
+QUANTDB_API_KEY=qdb_xxx AUTO_DL=yes AUTODL_SINCE=2024-01-01 AUTODL_DATASETS=l1_factors \
+  bash setup-autodl-native.sh
+```
+
+已有数据仍做增量：
+
+```bash
+AUTODL_RESYNC=1 QUANTDB_API_KEY=qdb_xxx bash setup-autodl-native.sh
+```
+
+脚本会：检测 Python / GPU；安装训练依赖（缺啥装啥，pandas 钉在 2.x）；创建 `/root/workspace` 与 `/root/autodl-fs/quantdb`；写入 API Key；按选择自动同步 / 增量 / 跳过并提示手动上传。
+
+## 数据集
+
+训练直读 QuantDB 因子 parquet，放 **数据盘** `/root/autodl-fs/quantdb`（重启不丢；系统盘 `/` 会清）。
+
+| 方式 | 何时 | 行为 |
+|------|------|------|
+| 自动同步 | 空盘默认，或 `AUTO_DL=yes` | `quantdb-sdk` 增量拉取，默认 **近 3 年**、仅 **`l1_factors`**（可用 `AUTODL_SINCE` / `AUTODL_DATASETS` 改） |
+| 增量 | 已有数据后选 Y，或 `AUTODL_RESYNC=1` | 同样走 SDK，已下载分区会匹配跳过 |
+| 手动 | 选 N / `AUTO_DL=no` | 自行把 `6_ml_datasets/` 传到 `/root/autodl-fs/quantdb/6_ml_datasets/` |
+| 跳过 | 已有数据默认，或 `AUTO_DL=skip` | 不下载 |
+
+日常开训时，主节点编排器还会再跑 `quantdb_daily_sync.py --parquet-only`（与本脚本独立）。
+
+环境变量：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `QUANTDB_API_KEY` | 无 | 自动/增量同步必填 |
+| `AUTO_DL` | 空盘 yes / 有数据 skip | `yes` / `no` / `skip` |
+| `AUTODL_RESYNC` | 0 | `1` 时已有数据仍增量 |
+| `AUTODL_SINCE` | `3-year` | `YYYY-MM-DD` 或 `full` |
+| `AUTODL_DATASETS` | `l1_factors` | 逗号分隔，如 `l1_factors,l2_factors` |
+| `PIP_INDEX` | 阿里云 PyPI | 国内源 |
 
 ## 环境变量持久化
 
-`QUANTDB_API_KEY` 写入：
-- `/etc/profile.d/quantmind_sh.sh`（全局，登录/编排器 ssh 都能读到）
-- `~/.bashrc`（兜底）
+Key 写入（格式统一为 `export QUANTDB_API_KEY=...`）：
 
-手工验证：
+- `/etc/profile.d/quantmind_sh.sh`
+- `~/.bashrc`
+- `/root/workspace/.env`（编排器非登录 SSH 不一定 source profile.d，开训同步由主节点注入 Key）
+
+验证：
+
 ```bash
-export QUANTDB_API_KEY=$(grep QUANTDB_API_KEY /etc/profile.d/quantmind_sh.sh | cut -d= -f2)
+set -a; . /root/workspace/.env; set +a
 /root/miniconda3/bin/python -c "import lightgbm, duckdb, quantdb_sdk; print('deps OK')"
+nvidia-smi
+du -sh /root/autodl-fs/quantdb/6_ml_datasets
 ```
 
 ## 在项目侧注册节点
 
-初始化完成后，编辑项目根 `config/training_nodes.yaml` 增加该节点（不会被 gitignore 提交的密钥：
+编辑 `config/training_nodes.yaml`（gitignore，含凭证不入库）：
+
 ```yaml
-  - id: autodl-2
+  - id: autodl-1
     name: "AutoDL RTX4090 (免Docker)"
     host: "connect.xxx.seetacloud.com"
     port: <端口>
@@ -71,26 +101,10 @@ export QUANTDB_API_KEY=$(grep QUANTDB_API_KEY /etc/profile.d/quantmind_sh.sh | c
     quantdb_dir: "/root/autodl-fs/quantdb"
 ```
 
-> `config/training_nodes.yaml` 被 `.gitignore` 忽略，含明文凭证，不会提交。
-
 ## 验证
 
-节点侧（SSH 登录 AutoDL 后）：
-```bash
-# 依赖就绪
-/root/miniconda3/bin/python -c "import lightgbm, duckdb, quantdb_sdk; print('deps OK')"
-# GPU 就绪
-nvidia-smi
-# 数据集就绪
-du -sh /root/autodl-fs/quantdb/6_ml_datasets
-```
-
-主节点侧（提交一次小训练，`node_id=该节点id`），观察：
-- redis 日志流出现「原生训练进程已启动」
-- 产物回传 `/data/training_jobs/{run_id}/`
-- 模型注册 `qm_user_models`
+节点侧见上方命令。主节点提交 `node_id=该节点id` 的小训练后应看到：原生进程启动、产物回传到 `/data/training_jobs/{run_id}/`、模型写入 `qm_user_models`。
 
 ## 文件
 
-- `setup-autodl-native.sh` — AutoDL 节点交互式初始化脚本（本机执行）
-- `atudol-native-sync.py`（可选，如需要独立下载脚本时补充）
+- `setup-autodl-native.sh` — 节点初始化（交互 + 非交互）

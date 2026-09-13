@@ -155,7 +155,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.wait()
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"rsync push failed ({proc.returncode}): "
+                f"{(stderr or stdout).decode(errors='replace')[:500]}"
+            )
 
     async def _scp_pull(self, remote_file: str, local_dir: Path) -> None:
         """scp 拉取远端单个文件到本地目录（幂等，文件不存在则跳过）。"""
@@ -190,17 +195,34 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.wait()
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"scp push failed ({proc.returncode}): "
+                f"{stderr.decode(errors='replace')[:500]}"
+            )
 
 
     async def test_connection(self) -> dict:
-        """测试 SSH 连接 + 远端 docker 可用性。"""
-        results = {}
+        """测试 SSH 连接；native_python 检查 Python/GPU，ssh_docker 检查 docker。"""
+        results = {"host": self.host, "exec_mode": self.exec_mode}
+        if self.exec_mode == "native_python":
+            python = self.native_python or "/root/miniconda3/bin/python"
+            code, out, err = await self._ssh_exec(
+                f"echo OK && {python} --version && "
+                f"(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo no-gpu)"
+            )
+            results["ssh"] = code == 0 and "OK" in out
+            results["docker"] = False
+            results["native_python"] = code == 0
+            results["detail"] = (out + err).strip()
+            if code != 0:
+                results["error"] = (err or out).strip()
+            return results
         code, out, err = await self._ssh_exec("echo OK && docker --version 2>&1 | head -1")
         results["ssh"] = code == 0 and "OK" in out
         results["docker"] = code == 0 and "Docker" in (out + err)
         if code == 0:
-            results["host"] = self.host
             results["detail"] = (out + err).strip()
         else:
             results["error"] = (err or out).strip()
@@ -259,7 +281,9 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             # SDK installation with TRAINING_AUTODL_QUANTDB_SYNC_CMD.
             if direct_source:
                 if self.exec_mode == "native_python":
-                    # 免 docker：同步脚本无镜像内置 /app，依赖自推的脚本 + backend 子树。
+                    # 免 docker：同步脚本要 import backend.shared.runtime_secrets，
+                    # 必须先推 backend_min，再跑 quantdb_daily_sync.py。
+                    await self._deploy_native_backend(run_id)
                     await self._ensure_native_sync_files()
                     sync_python = self.native_python or "/root/miniconda3/bin/python"
                     sync_script = f"{self.work_dir}/modules/quantdb_daily_sync.py"
@@ -419,7 +443,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _resolve_quantdb_sync_script(self) -> str | None:
         """定位本地 quantdb_daily_sync.py 同步脚本路径。"""
         candidates = [
-            str(Path(__file__).resolve().parents[3] / "backend" / "scripts" / "quantdb_daily_sync.py"),
+            str(Path(__file__).resolve().parents[4] / "backend" / "scripts" / "quantdb_daily_sync.py"),
             "/app/backend/scripts/quantdb_daily_sync.py",
         ]
         return next((path for path in candidates if Path(path).is_file()), None)
@@ -464,8 +488,10 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             gpu_env = f"CUDA_VISIBLE_DEVICES={self.gpus} "
         cmd = (
             f"cd {self.work_dir} && rm -f {exit_mark} && "
-            f"PYTHONPATH={py_path} {gpu_env}nohup {python} {self.work_dir}/train.py "
-            f"--config {self.work_dir}/config.yaml > {log_path} 2>&1 & "
+            f"{gpu_env}nohup bash -c "
+            f"'PYTHONPATH={py_path} {python} {self.work_dir}/train.py "
+            f"--config {self.work_dir}/config.yaml > {log_path} 2>&1; "
+            f"echo $? > {exit_mark}' >/dev/null 2>&1 & "
             f"echo $! > {pid_file}; echo $!; cat {pid_file}"
         )
         code, out, err = await self._ssh_exec(cmd, timeout=60)
@@ -609,14 +635,13 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                     )
                     alive = "alive" in (alive_out or "")
                     if not alive:
-                        exit_code = "0"
-                        # 结束文件标记失败（train.py 异常退出时 orchestrator 写入非 0 标记）
-                        code4, mark_out, _ = await self._ssh_exec(
-                            f"cat {self.work_dir}/train_{run_id}.exit 2>/dev/null || echo ''", timeout=30,
+                        await asyncio.sleep(1)
+                        _, mark_out, _ = await self._ssh_exec(
+                            f"cat {self.work_dir}/train_{run_id}.exit 2>/dev/null || echo ''",
+                            timeout=30,
                         )
                         mark = (mark_out or "").strip()
-                        if mark and mark != "0":
-                            exit_code = mark
+                        exit_code = mark if mark != "" else "1"
                         await self._handle_container_end(run_id, f"native-{run_id}", exit_code)
                         return
                 else:
@@ -919,6 +944,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _resolve_train_script(self) -> str | None:
         """定位本地 train.py 训练脚本路径（优先项目目录，回退容器内路径）。"""
         candidates = [
+            str(Path(__file__).resolve().parents[4] / "docker" / "training" / "train.py"),
             str(Path(__file__).resolve().parents[3] / "docker" / "training" / "train.py"),
             "/app/docker/training/train.py",
             "/app/train.py",
@@ -931,6 +957,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _resolve_preprocessing_script(self) -> str | None:
         """定位本地 preprocessing.py（train.py 顶层 import 的纯函数集）。"""
         candidates = [
+            str(Path(__file__).resolve().parents[4] / "docker" / "training" / "preprocessing.py"),
             str(Path(__file__).resolve().parents[3] / "docker" / "training" / "preprocessing.py"),
             "/app/docker/training/preprocessing.py",
             "/app/preprocessing.py",
@@ -942,14 +969,14 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
 
     def _resolve_quantdb_factor_reader(self) -> str | None:
         candidates = [
-            str(Path(__file__).resolve().parents[2] / "data_platform" / "quantdb_factor_reader.py"),
+            str(Path(__file__).resolve().parents[1] / "data_platform" / "quantdb_factor_reader.py"),
             "/app/backend/services/engine/data_platform/quantdb_factor_reader.py",
         ]
         return next((path for path in candidates if Path(path).is_file()), None)
 
     def _resolve_quantdb_hub(self) -> str | None:
         candidates = [
-            str(Path(__file__).resolve().parents[2] / "data_platform" / "quantdb_hub.py"),
+            str(Path(__file__).resolve().parents[1] / "data_platform" / "quantdb_hub.py"),
             "/app/backend/services/engine/data_platform/quantdb_hub.py",
         ]
         return next((path for path in candidates if Path(path).is_file()), None)
@@ -957,6 +984,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _resolve_parallel_utils_script(self) -> str | None:
         """定位本地 parallel_utils.py（多核因子筛选，train.py 顶层 import）。"""
         candidates = [
+            str(Path(__file__).resolve().parents[4] / "docker" / "training" / "parallel_utils.py"),
             str(Path(__file__).resolve().parents[3] / "docker" / "training" / "parallel_utils.py"),
             "/app/docker/training/parallel_utils.py",
             "/app/parallel_utils.py",
@@ -969,6 +997,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _resolve_trainers_dir(self) -> str | None:
         """定位本地 model_trainers/ 包目录（train.py 顶层 import）。"""
         candidates = [
+            str(Path(__file__).resolve().parents[4] / "docker" / "training" / "model_trainers"),
             str(Path(__file__).resolve().parents[3] / "docker" / "training" / "model_trainers"),
             "/app/docker/training/model_trainers",
             "/app/model_trainers",
@@ -981,6 +1010,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _resolve_diagnostics_dir(self) -> str | None:
         """定位本地 diagnostics/ 包目录（train.py 顶层 import）。"""
         candidates = [
+            str(Path(__file__).resolve().parents[4] / "docker" / "training" / "diagnostics"),
             str(Path(__file__).resolve().parents[3] / "docker" / "training" / "diagnostics"),
             "/app/docker/training/diagnostics",
             "/app/diagnostics",
@@ -993,6 +1023,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _resolve_data_dir(self) -> str | None:
         """定位本地 data/ 包目录（train.py 顶层 import）。"""
         candidates = [
+            str(Path(__file__).resolve().parents[4] / "docker" / "training" / "data"),
             str(Path(__file__).resolve().parents[3] / "docker" / "training" / "data"),
             "/app/docker/training/data",
             "/app/data",
@@ -1005,7 +1036,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     def _resolve_inference_template(self) -> str | None:
         """定位本地统一推理模板 inference_parquet.py。"""
         candidates = [
-            str(Path(__file__).resolve().parents[3]
+            str(Path(__file__).resolve().parents[4]
                 / "backend" / "services" / "engine" / "inference" / "templates" / "inference_parquet.py"),
             "/app/backend/services/engine/inference/templates/inference_parquet.py",
         ]

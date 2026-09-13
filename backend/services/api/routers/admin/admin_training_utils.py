@@ -345,6 +345,7 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         # DataCfg 池字段（成分在编排器侧解析后随 config.yaml 进容器）。
         # 为空表示全市场训练（保持旧行为）。
         "pool_id": str(payload.get("pool_id") or "").strip() or None,
+        "node_id": str(payload.get("node_id") or "local").strip() or "local",
     }
     # Stacking 集成参数 + Optuna 超参搜索 + 截面预处理（显式透传）
     if "n_folds" in payload:
