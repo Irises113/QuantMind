@@ -10,17 +10,34 @@
 可通过环境变量覆盖：
   STOCK_INDEX_JSON_PATH=/abs/path/stocks_index.json
   QM_QUANTDB_DATA_DIR=/data/quantdb
+
+拼音字段需本机安装 pypinyin（不入 requirements.txt）：
+  pip install pypinyin
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List
 
 import pandas as pd
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from stock_pinyin_util import name_to_pinyin_abbr  # noqa: E402
+
+
+def _pinyin_or_empty(name: str) -> str:
+    try:
+        return name_to_pinyin_abbr(name)
+    except ImportError:
+        return ""
 
 
 def _now_iso() -> str:
@@ -93,15 +110,15 @@ def build_items(rows: List[Any]) -> List[dict[str, Any]]:
         if not name:
             continue
         code, exchange = symbol.split(".", 1)
+        pinyin = _pinyin_or_empty(name)
         items.append(
             {
                 "symbol": symbol,
                 "code": code,
                 "exchange": exchange,
                 "name": name,
-                # 预留字段：后续可通过离线任务补充拼音简称
                 "abbr": code.lower(),
-                "pinyin": "",
+                "pinyin": pinyin,
             }
         )
     return items
