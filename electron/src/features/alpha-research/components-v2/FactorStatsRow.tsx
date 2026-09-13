@@ -20,19 +20,17 @@ export const FactorStatsRow: React.FC<FactorStatsRowProps> = ({ metrics, onBackt
   }, [metrics]);
 
   const StatCard = ({ icon: Icon, label, value, trend, color, className }: any) => (
-    <div className={`glass rounded-xl p-4 card-hover h-[140px] flex flex-col justify-between ${className}`}>
-      <div className="flex items-start justify-between mb-2">
-        <div className={`p-2 rounded-lg ${color} bg-opacity-20`}>
-          <Icon className={`h-5 w-5 ${color}`} />
-        </div>
-        {trend !== undefined && (
-          <Badge variant={trend > 0 ? 'success' : 'destructive'} className="text-xs">
-            {trend > 0 ? '+' : ''}{formatPercent(trend, 1)}
-          </Badge>
-        )}
+    <div className={`glass rounded-xl p-4 card-hover h-[140px] flex flex-col items-center justify-center text-center gap-1 ${className}`}>
+      <div className={`p-2 rounded-lg ${color} bg-opacity-20`}>
+        <Icon className={`h-5 w-5 ${color}`} />
       </div>
-      <div className="text-xs text-muted-foreground mb-1">{label}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
       <div className="text-2xl font-bold">{value}</div>
+      {trend !== undefined && (
+        <Badge variant={trend > 0 ? 'success' : 'destructive'} className="text-xs">
+          {trend > 0 ? '+' : ''}{formatPercent(trend, 1)}
+        </Badge>
+      )}
     </div>
   );
 

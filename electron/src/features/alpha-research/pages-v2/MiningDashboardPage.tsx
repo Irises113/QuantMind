@@ -48,7 +48,7 @@ export const MiningDashboardPage: React.FC<MiningDashboardPageProps> = ({ onNavi
       showNavigation={!!onNavigate}
     >
       {/* 任务状态栏：状态 + 进度 + 停止（替代原底部悬浮输入框） */}
-      <div className="mb-4 flex items-center gap-3 rounded-2xl border border-border/60 bg-white/80 backdrop-blur-xl px-4 py-3 shadow-xs">
+      <div className="mb-4 flex items-center justify-center gap-3 rounded-2xl border border-border/60 bg-white/80 backdrop-blur-xl px-4 py-3 shadow-xs text-center">
         {task.status === 'running' ? (
           <span className="relative flex h-2.5 w-2.5 shrink-0">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
@@ -64,7 +64,7 @@ export const MiningDashboardPage: React.FC<MiningDashboardPageProps> = ({ onNavi
               ? '任务已完成'
               : '任务已失败'}
         </span>
-        <span className="text-xs text-muted-foreground truncate flex-1 min-w-0" title={task.progress?.message}>
+        <span className="text-xs text-muted-foreground truncate min-w-0 max-w-md" title={task.progress?.message}>
           {task.progress?.message || `Loop ${task.progress?.currentRound ?? 0}/${task.progress?.totalRounds ?? 0}`}
         </span>
         <div className="w-28 h-1.5 rounded-full bg-slate-100 overflow-hidden hidden sm:block">

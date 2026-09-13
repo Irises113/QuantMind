@@ -93,7 +93,7 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics, onNavigate }) =
   return (
     <Card className="glass card-hover animate-fade-in-up w-full">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base flex items-center gap-2">
+        <CardTitle className="text-base flex items-center justify-center gap-2">
           <div className="h-2 w-2 rounded-full bg-purple-500 animate-pulse" />
           当前因子库 RankIC Top 10
         </CardTitle>
@@ -103,16 +103,16 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics, onNavigate }) =
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border/50">
-                <th className="py-3 px-4 text-left font-medium text-muted-foreground w-1/6">因子名</th>
-                <th className="py-3 px-4 text-left font-medium text-muted-foreground w-1/4">公式</th>
-                <th className="py-3 px-4 text-left font-medium text-muted-foreground">市场</th>
-                <th className="py-3 px-4 text-right font-medium text-muted-foreground">IC</th>
-                <th className="py-3 px-4 text-right font-medium text-muted-foreground">RankIC</th>
-                <th className="py-3 px-4 text-right font-medium text-muted-foreground">ICIR</th>
-                <th className="py-3 px-4 text-right font-medium text-muted-foreground">RankICIR</th>
-                <th className="py-3 px-4 text-right font-medium text-muted-foreground">ARR</th>
-                <th className="py-3 px-4 text-right font-medium text-muted-foreground">MDD</th>
-                <th className="py-3 px-4 text-right font-medium text-muted-foreground">Sharpe</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground w-1/6">因子名</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground w-1/4">公式</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground">市场</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground">IC</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground">RankIC</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground">ICIR</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground">RankICIR</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground">ARR</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground">MDD</th>
+                <th className="py-3 px-4 text-center font-medium text-muted-foreground">Sharpe</th>
                 <th className="py-3 px-4 text-center font-medium text-muted-foreground">操作</th>
               </tr>
             </thead>
@@ -122,13 +122,13 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics, onNavigate }) =
                   <HoverCard key={index} openDelay={200}>
                     <HoverCardTrigger asChild>
                       <tr className="group hover:bg-muted/50 transition-colors border-b border-border/50 last:border-0 cursor-help">
-                        <td className="py-3 px-4 font-medium max-w-[150px] truncate" title={factor.factorName}>
+                        <td className="py-3 px-4 font-medium max-w-[150px] truncate text-center" title={factor.factorName}>
                           {truncate(factor.factorName, 15)}
                         </td>
-                        <td className="py-3 px-4 font-mono text-xs text-muted-foreground max-w-[200px] truncate">
+                        <td className="py-3 px-4 font-mono text-xs text-muted-foreground max-w-[200px] truncate text-center">
                           {truncate(factor.factorExpression, 30)}
                         </td>
-                        <td className="py-3 px-4">
+                        <td className="py-3 px-4 text-center">
                           {factor.market ? (
                             <span className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium bg-secondary/30 text-muted-foreground">
                               {MARKET_LABELS[factor.market] || factor.market}
@@ -137,13 +137,13 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics, onNavigate }) =
                             <span className="text-muted-foreground/40 text-xs">—</span>
                           )}
                         </td>
-                        <td className="py-3 px-4 text-right font-mono">{formatMetric(factor.ic)}</td>
-                        <td className="py-3 px-4 text-right font-mono font-bold text-primary">{formatMetric(factor.rankIc)}</td>
-                        <td className="py-3 px-4 text-right font-mono">{formatMetric(factor.icir)}</td>
-                        <td className="py-3 px-4 text-right font-mono">{formatMetric(factor.rankIcir)}</td>
-                        <td className="py-3 px-4 text-right font-mono text-success">{formatMetric(factor.annualReturn, 'percent')}</td>
-                        <td className="py-3 px-4 text-right font-mono text-destructive">{formatMetric(factor.maxDrawdown, 'percent')}</td>
-                        <td className="py-3 px-4 text-right font-mono">{formatMetric(factor.sharpeRatio)}</td>
+                        <td className="py-3 px-4 text-center font-mono">{formatMetric(factor.ic)}</td>
+                        <td className="py-3 px-4 text-center font-mono font-bold text-primary">{formatMetric(factor.rankIc)}</td>
+                        <td className="py-3 px-4 text-center font-mono">{formatMetric(factor.icir)}</td>
+                        <td className="py-3 px-4 text-center font-mono">{formatMetric(factor.rankIcir)}</td>
+                        <td className="py-3 px-4 text-center font-mono text-success">{formatMetric(factor.annualReturn, 'percent')}</td>
+                        <td className="py-3 px-4 text-center font-mono text-destructive">{formatMetric(factor.maxDrawdown, 'percent')}</td>
+                        <td className="py-3 px-4 text-center font-mono">{formatMetric(factor.sharpeRatio)}</td>
                         <td className="py-3 px-4 text-center">
                           <div className="flex items-center justify-center gap-1">
                             {promoting[factor.factorName] === 'done' ? (
