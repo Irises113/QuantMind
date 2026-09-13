@@ -86,20 +86,31 @@ du -sh /root/autodl-fs/quantdb/6_ml_datasets
 
 ## 在项目侧注册节点
 
-编辑 `config/training_nodes.yaml`（gitignore，含凭证不入库）：
+编辑主节点 `config/training_nodes.yaml`（gitignore，含凭证不入库）。**推荐 `native_python`**，不要用 AutoDL 再套一层 Docker。
 
 ```yaml
-  - id: autodl-1
+nodes:
+  - id: autodl-rtx4090
     name: "AutoDL RTX4090 (免Docker)"
     host: "connect.xxx.seetacloud.com"
-    port: <端口>
+    port: <控制台 SSH 端口，重启实例会变>
     user: "root"
-    ssh_key: "C:\\Users\\<you>\\.ssh\\id_ed25519"   # 或 ssh_password
+    ssh_key: "/root/.ssh/id_ed25519"   # 或 ssh_password
     work_dir: "/root/workspace"
     exec_mode: "native_python"
     gpus: "all"
     quantdb_dir: "/root/autodl-fs/quantdb"
 ```
+
+主节点 `.env`：
+
+```bash
+TRAINING_MASTER_HOST=<协调机公网IP>   # AutoDL 回调 API，勿填 127.0.0.1
+```
+
+改完后 `docker compose restart quantmind`。密码 SSH 需要容器内有 `sshpass`。
+
+端到端（架构、开训、排障）见 **[docs/部署指南.md 第十一节](../../docs/部署指南.md)**。
 
 ## 验证
 

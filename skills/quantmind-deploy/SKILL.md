@@ -327,42 +327,56 @@ curl -s -X POST http://localhost:8000/api/v1/auth/login \
 
 ## 8. 云端 GPU 训练（AutoDL）
 
-模型训练可跑在 **AutoDL 远程 GPU 节点**（本地 Docker 是 CPU 训练）。
+**推荐把 AutoDL 当训练 Worker，不要在实例里装整套 QuantMind。** AutoDL Python 镜像一般不能嵌套 Docker，走 `exec_mode: native_python`。完整步骤以仓库文档为准：
+
+- 操作手册：[docs/部署指南.md](../../docs/部署指南.md) 第十一节
+- 节点初始化：[deploy/autodl/README.md](../../deploy/autodl/README.md)
+
+模型训练可跑在 **AutoDL 远程 GPU 节点**（主节点 Docker 默认是 CPU 训练）。
 
 ### AutoDL 训练节点配置
 
 ```bash
 # 列出训练节点（本地 Docker + AutoDL 远程 GPU）
 curl -s -H "$AUTH" "$BASE/api/v1/admin/models/training-nodes"
-# 测试节点连接（SSH + docker 可用性）
+# 测试节点连接（native_python 测 SSH + Python/GPU；ssh_docker 测 docker）
 curl -s -X POST -H "$AUTH" -H "$CT" "$BASE/api/v1/admin/models/training-nodes/test" \
-  -d '{"node_id":"autodl-1"}'
-# 新增/更新节点配置（SSH 凭据等）
-curl -s -X POST -H "$AUTH" -H "$CT" "$BASE/api/v1/admin/models/training-nodes/config" \
-  -d '{"node_id":"autodl-1","host":"<ip>","port":22,"user":"root","ssh_key":"<key>","description":"AutoDL 4卡A100"}'
-# 节点实时状态（CPU/GPU/内存/训练容器）
-curl -s -H "$AUTH" "$BASE/api/v1/admin/models/training-nodes/{node_id}/status"
-# 节点详情 / 删除
-curl -s -H "$AUTH" "$BASE/api/v1/admin/models/training-nodes/{node_id}/detail"
-curl -s -X DELETE -H "$AUTH" "$BASE/api/v1/admin/models/training-nodes/{node_id}"
+  -d '{"node_id":"autodl-rtx4090"}'
 ```
 
-### AutoDL 远程训练镜像
+主节点 `config/training_nodes.yaml`（gitignore）示例：
+
+```yaml
+nodes:
+  - id: autodl-rtx4090
+    host: connect.xxx.seetacloud.com
+    port: <控制台端口>
+    user: root
+    exec_mode: native_python
+    work_dir: /root/workspace
+    quantdb_dir: /root/autodl-fs/quantdb
+```
+
+`.env` 设 `TRAINING_MASTER_HOST=<协调机公网IP>`。AutoDL 上先跑 `deploy/autodl/setup-autodl-native.sh`。
+
+### AutoDL 远程训练镜像（仅 ssh_docker）
+
+仅当远端**已经**有 Docker + GPU 直通时才用：
 
 ```bash
-# 在 AutoDL 节点从 git 直接构建（独立轻量镜像，仅训练依赖）
 docker build --build-arg TORCH_DEVICE=gpu -f docker/autodl/Dockerfile -t quantmind-train:latest .
-# 或一键远程构建脚本
 bash scripts/setup/build-autodl-remote.sh
 ```
 
 ### 远程训练流程
 
-1. **配节点**：`training-nodes/config` 存 AutoDL 节点 SSH 配置（`config/training_nodes.yaml`，含 SSH 凭据，gitignore 不入仓库）
-2. **测连接**：`training-nodes/test` 验证 SSH + docker
-3. **启动训练**：`run-training` 时选 `node_id=autodl-x`（GPU 训练）
-4. **看状态**：`training-runs/{run_id}` 轮询；节点实时状态 `training-nodes/{node_id}/status`
-5. **模型回传**：训练完模型 scp 回传注册到 `/models`
+1. **配节点**：`config/training_nodes.yaml`（含 SSH 凭据，不入库）
+2. **测连接**：`training-nodes/test`
+3. **启动训练**：`run-training` 选 `node_id=autodl-x`
+4. **看状态**：`training-runs/{run_id}`；节点状态 `training-nodes/{node_id}/status`
+5. **模型回传**：产物 rsync 回 `/data/training_jobs/{run_id}/` 并注册
+
+实例关机后 SSH 端口会变，必须改 yaml 的 `port`。
 
 ## 8b. AutoDL 实例内原生部署（无 Docker 环境）
 
