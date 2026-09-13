@@ -15,7 +15,8 @@ def test_simple_signal_loads_first_column_from_qlib_instrument_file(tmp_path: Pa
 
     signal = SimpleSignal(universe=str(instrument_file))
 
-    assert signal._load_instruments_from_file(instrument_file) == ["SH600000", "SZ000001"]
+    # 池文件代码统一转小写 qlib 口径，保证与 pred / qlib instrument 对齐
+    assert signal._load_instruments_from_file(instrument_file) == ["sh600000", "sz000001"]
 
 
 def test_simple_signal_lags_pred_series_to_next_available_date(tmp_path: Path):
