@@ -263,9 +263,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                     await self._ensure_native_sync_files()
                     sync_python = self.native_python or "/root/miniconda3/bin/python"
                     sync_script = f"{self.work_dir}/modules/quantdb_daily_sync.py"
+                    # 注入 QuantDB API key（主容器 env / runtime.env 解析），节点免预配置
+                    qdb_key = self._resolve_quantdb_api_key()
+                    qdb_key_env = f"QUANTDB_API_KEY={shlex.quote(qdb_key)} " if qdb_key else ""
                     sync_cmd = (
                         f"PYTHONPATH={self.work_dir}:{self.work_dir}/backend_min "
-                        f"{sync_python} {sync_script}"
+                        f"{qdb_key_env}{sync_python} {sync_script}"
                     )
                 else:
                     sync_cmd = _env_or(
@@ -397,6 +400,23 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             "/app/backend/scripts/quantdb_daily_sync.py",
         ]
         return next((path for path in candidates if Path(path).is_file()), None)
+
+    def _resolve_quantdb_api_key(self) -> str:
+        """解析 QuantDB API key（供 native 直读数据同步注入节点）。
+
+        优先真实环境变量 QUANTDB_API_KEY；否则读 config/runtime.env
+        （与主容器 daily sync 的 runtime_secrets 一致），都没有时返回空串
+        （同步将因缺 key 失败并在日志明示）。
+        """
+        key = (os.getenv("QUANTDB_API_KEY") or "").strip()
+        if key:
+            return key
+        try:
+            from backend.shared.runtime_secrets import get_secret
+
+            return str(get_secret("QUANTDB_API_KEY") or "").strip()
+        except Exception:  # noqa: BLE001
+            return ""
 
     async def _launch_native_train(self, run_id: str, config: dict) -> tuple[str, str]:
         """启动免 docker 原生训练进程（AutoDL 容器内 python train.py）。
