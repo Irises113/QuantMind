@@ -93,7 +93,7 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics, onNavigate }) =
   return (
     <Card className="glass card-hover animate-fade-in-up w-full">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base flex items-center justify-center gap-2">
+        <CardTitle className="text-base flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-purple-500 animate-pulse" />
           当前因子库 RankIC Top 10
         </CardTitle>
