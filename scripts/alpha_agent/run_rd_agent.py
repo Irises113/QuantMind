@@ -145,7 +145,15 @@ try:
     returns = close.groupby(level=1).pct_change().shift(-1)
 
     # Align factor and returns
-    factor_values = factor_df.stack()
+    # 因子结果为 MultiIndex(datetime, instrument) + 单列：直接取首列，
+    # 不能用 stack()（会多出一层列名索引）。
+    if isinstance(factor_df, pd.DataFrame):
+        factor_values = factor_df.iloc[:, 0]
+    else:
+        factor_values = factor_df
+    if factor_values.index.nlevels != 2:
+        print("BAD_FACTOR_INDEX")
+        sys.exit(1)
     factor_values.index.names = ['datetime', 'instrument']
     returns.index.names = ['datetime', 'instrument']
 
