@@ -16,7 +16,7 @@ import {
 } from 'antd';
 import { ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { adminService } from '../services/adminService';
-import type { AdminInferenceDispatchItem, AdminInferenceMonitor } from '../types';
+import type { AdminInferenceDispatchItem, AdminInferenceMonitor as AdminInferenceMonitorData } from '../types';
 
 const { Title, Text } = Typography;
 
@@ -34,7 +34,7 @@ const STATUS_COLOR: Record<string, string> = {
     skipped: 'default',
 };
 
-const emptyMonitor = (): AdminInferenceMonitor => ({
+const emptyMonitor = (): AdminInferenceMonitorData => ({
     schedule: {
         enabled: false,
         cron: '工作日 00:00',
@@ -85,7 +85,7 @@ function StatusTag({ status }: { status: string }) {
 }
 
 export const AdminInferenceMonitor: React.FC = () => {
-    const [data, setData] = useState<AdminInferenceMonitor>(emptyMonitor);
+    const [data, setData] = useState<AdminInferenceMonitorData>(emptyMonitor);
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState<string | undefined>();
     const [page, setPage] = useState(1);
@@ -118,14 +118,16 @@ export const AdminInferenceMonitor: React.FC = () => {
 
     return (
         <div className="mx-auto flex h-full min-h-0 w-full max-w-[1400px] flex-col gap-4 pb-4">
-            <div className="flex shrink-0 flex-col items-center text-center">
-                <Title level={4} className="!mb-1">
-                    推理监控
-                </Title>
-                <Text type="secondary">
-                    自动推理调度（Celery Beat 工作日 00:00）的成功、失败与跳过记录。
-                </Text>
-                <Space wrap className="mt-3 justify-center">
+            <div className="flex shrink-0 items-start justify-between gap-4">
+                <div>
+                    <Title level={4} className="!mb-1">
+                        推理监控
+                    </Title>
+                    <Text type="secondary">
+                        自动推理调度（Celery Beat 工作日 00:00）的成功、失败与跳过记录。
+                    </Text>
+                </div>
+                <Space wrap>
                     <Select
                         allowClear
                         placeholder="状态"
