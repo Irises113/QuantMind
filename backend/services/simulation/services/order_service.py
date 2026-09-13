@@ -41,12 +41,16 @@ class SimOrderService:
             remarks=data.remarks,
             status=OrderStatus.PENDING,
         )
+        # client_order_id 不落 sim_orders 表，只写入 simulation_orders 投影。
+        client_order_id = str(data.client_order_id or "").strip() or None
         self.db.add(order)
         await self.db.commit()
         await self.db.refresh(order)
         # V2链路会同步写simulation_orders投影；旧链路不需要，忽略trigger等kwargs
         try:
-            await self.sync_order_projection(order)
+            await self.sync_order_projection(
+                order, client_order_id=client_order_id
+            )
         except Exception:
             pass
         return order
@@ -142,7 +146,12 @@ class SimOrderService:
         except Exception:
             return None
 
-    async def sync_order_projection(self, order, rejected_reason: str | None = None):
+    async def sync_order_projection(
+        self,
+        order,
+        rejected_reason: str | None = None,
+        client_order_id: str | None = None,
+    ):
         """把旧SimOrder同步到simulation_orders投影；失败只记日志，保证主链路可用。"""
         try:
             import logging
@@ -151,6 +160,14 @@ class SimOrderService:
 
             status = getattr(order, "status", None)
             status_str = getattr(status, "value", status)
+            resolved_client_order_id = (
+                str(
+                    client_order_id
+                    or getattr(order, "client_order_id", None)
+                    or ""
+                ).strip()
+                or None
+            )
             stmt = (
                 select(SimulationOrderV2)
                 .where(SimulationOrderV2.order_id == getattr(order, "order_id", None))
@@ -187,6 +204,7 @@ class SimOrderService:
                         price=getattr(order, "price", None),
                         status=str(status_str or "pending"),
                         rejected_reason=rejected_reason,
+                        client_order_id=resolved_client_order_id,
                     )
                     self.db.add(proj)
                     await self.db.commit()
@@ -202,6 +220,8 @@ class SimOrderService:
                 existing.status = str(status_str or existing.status)
                 if rejected_reason is not None:
                     existing.rejected_reason = rejected_reason
+                if resolved_client_order_id and not existing.client_order_id:
+                    existing.client_order_id = resolved_client_order_id
                 await self.db.commit()
         except Exception:
             pass
