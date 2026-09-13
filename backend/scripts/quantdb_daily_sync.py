@@ -198,6 +198,32 @@ def _is_partition_file(path: Path) -> bool:
     return "/dt=" in str(path) and path.name == "data.parquet"
 
 
+def partition_date_of(key_or_path: str) -> date | None:
+    """从分区 key / 相对路径提取 dt=YYYYMMDD 的日期；非分区块返回 None。"""
+    import re as _re
+
+    m = _re.search(r"/dt=(\d{8})/|/dt=(\d{8})/|dt=(\d{8})", str(key_or_path))
+    if not m:
+        return None
+    digits = next((g for g in m.groups() if g), None)
+    if not digits:
+        return None
+    try:
+        return datetime.strptime(digits, "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def _since_skip(key: str, since: date | None) -> bool:
+    """近 N 年过滤：分区块的日期早于 since 时跳过（True=跳过）。非分区块不跳过。"""
+    if since is None:
+        return False
+    d = partition_date_of(key)
+    if d is None:
+        return False
+    return d < since
+
+
 def _download_object(client, dataset: str, cat_id: str, key: str, target: Path, layout: str):
     """下载单个对象，返回 (sha256, md5, size)。不校验服务端声明的 size。"""
     params = {"category_id": cat_id, "sub_category": dataset, "layout": layout}
@@ -227,7 +253,7 @@ def _download_object(client, dataset: str, cat_id: str, key: str, target: Path, 
     return h_sha.hexdigest(), h_md5.hexdigest(), size
 
 
-def _sync_v2_dataset(client, state, cat_id: str, dataset: str, progress_cb: Callable | None = None, should_cancel: Callable[[], bool] | None = None) -> tuple[int, int]:
+def _sync_v2_dataset(client, state, cat_id: str, dataset: str, progress_cb: Callable | None = None, should_cancel: Callable[[], bool] | None = None, since: date | None = None) -> tuple[int, int]:
     """同步 V2 分区数据集。跳过 patches，不校验服务端 size 声明。
 
     先走 releases 增量，再用 manifest 补漏——服务端可能已将新数据写入 manifest
@@ -270,6 +296,12 @@ def _sync_v2_dataset(client, state, cat_id: str, dataset: str, progress_cb: Call
     pending = []
     verify = []
     is_full_rewrite = dataset in FULL_REWRITE_V2_DATASETS
+    if since:
+        raw_count = len(latest)
+        latest = {k: v for k, v in latest.items() if not _since_skip(str(k), since)}
+        if len(latest) != raw_count:
+            log.info("[V2] %s: --since=%s 过滤，保留 %d/%d 个分区对象",
+                     dataset, since, len(latest), raw_count)
     for key, obj in latest.items():
         rel_path = obj.get("relative_path") or key
         target = QUANTDB_DATA_DIR / rel_path
@@ -363,7 +395,7 @@ def _sync_v2_dataset(client, state, cat_id: str, dataset: str, progress_cb: Call
     return done, errors
 
 
-def _sync_v1_dataset(client, state, cat_id: str, dataset: str, progress_cb: Callable | None = None, should_cancel: Callable[[], bool] | None = None) -> tuple[int, int]:
+def _sync_v1_dataset(client, state, cat_id: str, dataset: str, progress_cb: Callable | None = None, should_cancel: Callable[[], bool] | None = None, since: date | None = None) -> tuple[int, int]:
     """同步 V1 全量数据集。用 etag(md5) 校验，跳过服务端 size 声明。"""
     manifest = client.query_manifest(category_id=cat_id, sub_category=dataset)
     if not manifest:
@@ -372,6 +404,8 @@ def _sync_v1_dataset(client, state, cat_id: str, dataset: str, progress_cb: Call
     pending = []
     for obj in manifest:
         key = obj["key"]
+        if _since_skip(str(key), since):
+            continue
         remote_etag = (obj.get("etag") or "").strip('"')
         rel_path = obj.get("relative_path") or key
         target = QUANTDB_DATA_DIR / rel_path
@@ -551,12 +585,14 @@ def reseed_state(datasets: list[dict] | None = None) -> dict:
     return summary
 
 
-def sync_parquet(datasets: list[dict] | None = None, *, dry_run: bool = False, progress_cb: Callable | None = None, should_cancel: Callable[[], bool] | None = None) -> dict:
+def sync_parquet(datasets: list[dict] | None = None, *, dry_run: bool = False, progress_cb: Callable | None = None, should_cancel: Callable[[], bool] | None = None, since: date | None = None) -> dict:
     """增量同步 QuantDB parquet 数据。
 
     不走 SDK 的 sync_dataset()：服务端 manifest 的 size 声明与实际文件不符
     （如 trading_calendar 声明 15224、实际 15203），SDK 会因 size 校验失败
     整个数据集中断。这里改为自行下载 + 哈希校验，并跳过 patches 对象。
+
+    since：仅同步分区日期 >= since 的对象（近 N 年裁剪），None 表示全量。
     """
     if datasets is None:
         datasets = V2_DATASETS + V1_DATASETS
@@ -581,9 +617,9 @@ def sync_parquet(datasets: list[dict] | None = None, *, dry_run: bool = False, p
             progress_cb("dataset_start", dataset=sub, index=idx, total=len(datasets))
         try:
             if is_v2:
-                done, errs = _sync_v2_dataset(client, state, cat_id, sub, progress_cb=progress_cb, should_cancel=should_cancel)
+                done, errs = _sync_v2_dataset(client, state, cat_id, sub, progress_cb=progress_cb, should_cancel=should_cancel, since=since)
             else:
-                done, errs = _sync_v1_dataset(client, state, cat_id, sub, progress_cb=progress_cb, should_cancel=should_cancel)
+                done, errs = _sync_v1_dataset(client, state, cat_id, sub, progress_cb=progress_cb, should_cancel=should_cancel, since=since)
             if progress_cb:
                 progress_cb("dataset_done", dataset=sub, synced=done, errors=errs)
             if done:
@@ -1032,10 +1068,11 @@ def run_daily_sync(
     skip_snapshot: bool = False,
     full: bool = False,
     dry_run: bool = False,
+    since: date | None = None,
     progress_cb: Callable | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict:
-    """执行每日同步流程。"""
+    """执行每日同步流程。since：仅同步分区日期 >= since 的对象（近 N 年裁剪）。"""
     result = {
         "started": datetime.now().isoformat(),
         "parquet": None,
@@ -1052,7 +1089,7 @@ def run_daily_sync(
         if datasets:
             all_ds = V2_DATASETS + V1_DATASETS
             ds_list = [ds for ds in all_ds if ds["sub_category"] in datasets]
-        result["parquet"] = sync_parquet(ds_list, dry_run=dry_run, progress_cb=progress_cb, should_cancel=should_cancel)
+        result["parquet"] = sync_parquet(ds_list, dry_run=dry_run, progress_cb=progress_cb, should_cancel=should_cancel, since=since)
 
         # 上游历史 L1 分区只有因子，不含 OHLCV。每次同步后修复最近窗口，
         # 防止增量文件重新覆盖后让训练标签再次为空；历史全量由专用脚本执行。
@@ -1221,6 +1258,12 @@ def main():
         action="store_true",
         help="扫描并修复残缺的分区文件（删除后下次同步时重下）",
     )
+    parser.add_argument(
+        "--since",
+        type=str,
+        default=None,
+        help="仅同步分区日期 >= 此日期的对象（YYYY-MM-DD，近 N 年裁剪）；缺省同步全部分区",
+    )
     args = parser.parse_args()
 
     if args.status:
@@ -1248,6 +1291,14 @@ def main():
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
 
+    since = None
+    if args.since:
+        try:
+            since = datetime.strptime(str(args.since), "%Y-%m-%d").date()
+        except Exception:  # noqa: BLE001
+            log.error("--since 格式错误（应为 YYYY-MM-DD）: %s", args.since)
+            return 2
+
     result = run_daily_sync(
         parquet_only=args.parquet_only,
         datasets=datasets,
@@ -1257,6 +1308,7 @@ def main():
         skip_snapshot=args.skip_snapshot,
         full=args.full,
         dry_run=args.dry_run,
+        since=since,
     )
 
     log.info("Result: %s", json.dumps(result, indent=2, ensure_ascii=False, default=str))
