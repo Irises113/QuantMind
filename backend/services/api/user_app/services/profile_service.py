@@ -133,6 +133,9 @@ class ProfileService:
                 await session.execute(
                     text("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS llm_provider VARCHAR(32)")
                 )
+                await session.execute(
+                    text("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS llm_extra_headers TEXT")
+                )
                 ProfileService._profile_columns_checked = True
         except Exception:
             logger.exception("Failed to ensure user_profiles table")
@@ -186,6 +189,7 @@ class ProfileService:
                 "llm_base_url": profile.llm_base_url,
                 "llm_model": profile.llm_model,
                 "llm_provider": profile.llm_provider,
+                "llm_extra_headers": profile.llm_extra_headers,
                 "created_at": profile.created_at,
                 "updated_at": profile.updated_at,
                 "username_at_runtime": username,  # 附加用户名
@@ -247,6 +251,7 @@ class ProfileService:
                 "llm_base_url": profile.llm_base_url,
                 "llm_model": profile.llm_model,
                 "llm_provider": profile.llm_provider,
+                "llm_extra_headers": profile.llm_extra_headers,
                 "created_at": profile.created_at,
                 "updated_at": profile.updated_at,
                 "username_at_runtime": None,
@@ -314,6 +319,7 @@ class ProfileService:
                 "llm_base_url": profile.llm_base_url,
                 "llm_model": profile.llm_model,
                 "llm_provider": profile.llm_provider,
+                "llm_extra_headers": profile.llm_extra_headers,
                 "created_at": profile.created_at,
                 "updated_at": profile.updated_at,
                 "username_at_runtime": None,

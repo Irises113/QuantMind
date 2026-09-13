@@ -106,7 +106,12 @@ class LiveLLMGenerator(CodeGenerator):
         self._client = httpx.Client(timeout=timeout)
 
     def generate(self, prompt: EvalPrompt) -> str:
-        url = self._base.rstrip("/") + "/chat/completions"
+        from backend.services.engine.alpha_agent.llm_client import (
+            env_extra_headers,
+            openai_chat_url,
+        )
+
+        url = openai_chat_url(self._base)
         body = {
             "model": self._model,
             "messages": [
@@ -122,6 +127,7 @@ class LiveLLMGenerator(CodeGenerator):
                 headers={
                     "Authorization": f"Bearer {self._key}",
                     "Content-Type": "application/json",
+                    **env_extra_headers(),
                 },
             )
             if resp.status_code != 200:

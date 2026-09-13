@@ -14,9 +14,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -30,12 +31,55 @@ def _is_placeholder(key: str) -> bool:
     return (not k) or any(p in k for p in _PLACEHOLDER_KEYS) or k.startswith("sk-在此")
 
 
+def parse_extra_headers(raw: str | dict | None) -> dict[str, str]:
+    """把自定义请求头（JSON 文本或 dict）解析成 {name: value}。
+
+    非法/空输入返回空 dict（不抛异常，避免因一个头的格式问题阻断调用）。
+    """
+    if not raw:
+        return {}
+    data: dict | None = None
+    if isinstance(raw, dict):
+        data = raw
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                data = parsed
+        except Exception:
+            logger.warning("LLM extra headers is not valid JSON, ignored")
+            return {}
+    if not data:
+        return {}
+    return {str(k): str(v) for k, v in data.items() if k and v is not None}
+
+
+def env_extra_headers() -> dict[str, str]:
+    """全局兜底：从 LLM_EXTRA_HEADERS 环境变量读取自定义请求头。"""
+    return parse_extra_headers(os.getenv("LLM_EXTRA_HEADERS", ""))
+
+
+def openai_chat_url(base_url: str) -> str:
+    """OpenAI 兼容 chat 端点：统一补齐 /v1 后拼 /chat/completions。
+
+    与实际调用、测试连接共用同一套规则，避免「测试通过、实际 404」。
+    """
+    base = (base_url or "").strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base += "/v1"
+    return f"{base}/chat/completions"
+
+
 @dataclass(frozen=True)
 class LLMConfig:
     api_key: str
     base_url: str
     model: str
     protocol: str  # "openai" | "anthropic"
+    headers: dict[str, str] = field(default_factory=dict)
 
     def llm_env_overrides(self) -> dict[str, str]:
         """生成 RD-Agent 子进程的 LLM 环境变量覆盖。
@@ -43,7 +87,7 @@ class LLMConfig:
         覆盖 LITELLM_*/OPENAI_*/CHAT_MODEL 全套，确保 build_llm_env 的
         优先级链（占位符过滤后）最终选中本配置。
         """
-        return {
+        env = {
             "LITELLM_OPENAI_API_KEY": self.api_key,
             "LITELLM_OPENAI_API_BASE": self.base_url,
             "OPENAI_API_KEY": self.api_key,
@@ -51,6 +95,9 @@ class LLMConfig:
             "CHAT_MODEL": self.model,
             "REASONING_MODEL": self.model,
         }
+        if self.headers:
+            env["LLM_EXTRA_HEADERS"] = json.dumps(self.headers, ensure_ascii=False)
+        return env
 
 
 def resolve_llm_config() -> LLMConfig | None:
@@ -65,10 +112,10 @@ def resolve_llm_config() -> LLMConfig | None:
         model = os.getenv("DEEPSEEK_MODEL", "").strip() or "deepseek-chat"
         # Anthropic 兼容端点（.../anthropic）：chat() 会再拼 /v1/messages，不能再补 /v1
         if "/anthropic" in base:
-            return LLMConfig(api_key=deepseek_key, base_url=base, model=model, protocol="anthropic")
+            return LLMConfig(api_key=deepseek_key, base_url=base, model=model, protocol="anthropic", headers=env_extra_headers())
         if not base.endswith("/v1"):
             base += "/v1"
-        return LLMConfig(api_key=deepseek_key, base_url=base, model=model, protocol="openai")
+        return LLMConfig(api_key=deepseek_key, base_url=base, model=model, protocol="openai", headers=env_extra_headers())
 
     key = (
         os.getenv("AI_IDE_LLM_API_KEY", "").strip()
@@ -94,7 +141,7 @@ def resolve_llm_config() -> LLMConfig | None:
         protocol = "anthropic"
     else:
         protocol = "openai"
-    return LLMConfig(api_key=key, base_url=base, model=model, protocol=protocol)
+    return LLMConfig(api_key=key, base_url=base, model=model, protocol=protocol, headers=env_extra_headers())
 
 
 async def chat(
@@ -132,6 +179,7 @@ async def chat(
                     "Authorization": f"Bearer {cfg.api_key}",
                     "anthropic-version": "2023-06-01",
                     "Content-Type": "application/json",
+                    **cfg.headers,
                 },
                 json=payload,
             )
@@ -143,10 +191,11 @@ async def chat(
                 "temperature": temperature,
             }
             resp = await client.post(
-                f"{cfg.base_url.rstrip('/')}/chat/completions",
+                openai_chat_url(cfg.base_url),
                 headers={
                     "Authorization": f"Bearer {cfg.api_key}",
                     "Content-Type": "application/json",
+                    **cfg.headers,
                 },
                 json=payload,
             )

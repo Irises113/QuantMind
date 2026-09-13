@@ -38,6 +38,7 @@ class OpenAIProvider(BaseAIProvider):
                 base_url=self.config.api_base,
                 timeout=self.config.timeout,
                 max_retries=self.config.retry_attempts,
+                default_headers=self.config.extra_headers or None,
             )
 
             # 测试连接

@@ -784,7 +784,7 @@ export class UserCenterService extends BaseApiClient {
   /**
    * 获取 LLM 配置状态
    */
-  async getLLMConfig(): Promise<{ has_key: boolean; masked_key: string; model: string; base_url: string; provider: string }> {
+  async getLLMConfig(): Promise<{ has_key: boolean; masked_key: string; model: string; base_url: string; provider: string; extra_headers: string }> {
     const response = await this.get<any>('/ai-ide/config/llm');
     return {
       has_key: response?.has_key || false,
@@ -792,21 +792,22 @@ export class UserCenterService extends BaseApiClient {
       model: response?.model || '',
       base_url: response?.base_url || '',
       provider: response?.provider || '',
+      extra_headers: response?.extra_headers || '',
     };
   }
 
   /**
-   * 保存 LLM 配置 (API Key + Model + Base URL)
+   * 保存 LLM 配置 (API Key + Model + Base URL + 自定义请求头)
    */
-  async saveLLMConfig(apiKey: string, model?: string, baseUrl?: string, provider?: string): Promise<{ success: boolean; message?: string }> {
-    return this.post('/ai-ide/config/llm', { qwen_api_key: apiKey, model, base_url: baseUrl, provider });
+  async saveLLMConfig(apiKey: string, model?: string, baseUrl?: string, provider?: string, extraHeaders?: string): Promise<{ success: boolean; message?: string }> {
+    return this.post('/ai-ide/config/llm', { qwen_api_key: apiKey, model, base_url: baseUrl, provider, extra_headers: extraHeaders });
   }
 
   /**
    * 测试 LLM 配置连通性（后端不落库，直接用传入的 Key/模型/地址发请求）
    */
-  async testLLMConfig(apiKey: string, model?: string, baseUrl?: string): Promise<{ success: boolean; message?: string; status_code?: number }> {
-    return this.post('/ai-ide/config/llm/test', { qwen_api_key: apiKey, model, base_url: baseUrl });
+  async testLLMConfig(apiKey: string, model?: string, baseUrl?: string, extraHeaders?: string): Promise<{ success: boolean; message?: string; status_code?: number }> {
+    return this.post('/ai-ide/config/llm/test', { qwen_api_key: apiKey, model, base_url: baseUrl, extra_headers: extraHeaders });
   }
 
 

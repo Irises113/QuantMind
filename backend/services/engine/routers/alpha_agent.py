@@ -45,7 +45,11 @@ async def _fetch_profile_llm_config(user_id: str, tenant_id: str):
 
     与 AI-IDE 共享同一份凭证。无有效 Key 返回 None。
     """
-    from backend.services.engine.alpha_agent.llm_client import LLMConfig, _is_placeholder
+    from backend.services.engine.alpha_agent.llm_client import (
+        LLMConfig,
+        _is_placeholder,
+        parse_extra_headers,
+    )
 
     try:
         from backend.shared.auth import get_internal_call_secret
@@ -75,7 +79,13 @@ async def _fetch_profile_llm_config(user_id: str, tenant_id: str):
         base = base.rstrip("/")
         # DeepSeek 等 Anthropic 兼容端点（.../anthropic）走 Anthropic 协议
         protocol = "anthropic" if "/anthropic" in base or model.lower().startswith("astron") else "openai"
-        return LLMConfig(api_key=key, base_url=base, model=model, protocol=protocol)
+        # OpenAI 兼容端点统一保留 /v1（实际调用/RD-Agent 子进程都按 {base}/chat/completions 拼接）
+        if protocol == "openai" and not base.endswith("/v1"):
+            base += "/v1"
+        headers = parse_extra_headers(data.get("llm_extra_headers"))
+        return LLMConfig(
+            api_key=key, base_url=base, model=model, protocol=protocol, headers=headers
+        )
     except Exception:
         logger.exception("[alpha-agent] fetch profile llm config failed")
         return None

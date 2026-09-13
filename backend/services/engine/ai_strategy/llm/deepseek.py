@@ -16,6 +16,11 @@ from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 import requests
 
+from backend.services.engine.alpha_agent.llm_client import (
+    env_extra_headers,
+    openai_chat_url,
+)
+
 if TYPE_CHECKING:
     from ..models import StrategyConversionRequest, StrategyConversionResponse
 
@@ -57,7 +62,7 @@ class DeepseekLLM:
             or "https://api.deepseek.com"
         )
         self.base_url = str(base_url).rstrip("/")
-        self.endpoint = f"{self.base_url}/chat/completions"
+        self.endpoint = openai_chat_url(self.base_url)
 
         self.api_key = api_key
         self.model = (
@@ -85,6 +90,7 @@ class DeepseekLLM:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            **env_extra_headers(),
         }
 
         last_exc: Exception | None = None
@@ -179,6 +185,7 @@ class DeepseekProvider(BaseLLMProvider):
             headers={
                 "Authorization": f"Bearer {self.llm.api_key}",
                 "Content-Type": "application/json",
+                **env_extra_headers(),
             },
             timeout=180,
         )

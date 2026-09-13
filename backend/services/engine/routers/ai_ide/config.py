@@ -16,6 +16,7 @@ class LLMConfig(BaseModel):
     model: str | None = None
     base_url: str | None = None
     provider: str | None = None
+    extra_headers: str | None = None  # 自定义请求头（JSON 文本）
 
 
 def _get_user_info(request: Request):
@@ -54,6 +55,9 @@ def _build_profile_payload(config: LLMConfig, raw_body: dict | None = None) -> d
         payload["llm_base_url"] = config.base_url.strip()
     if config.provider is not None and config.provider.strip():
         payload["llm_provider"] = config.provider.strip()
+    # 自定义请求头：None=不动；空串=清除；有值=覆盖
+    if config.extra_headers is not None:
+        payload["llm_extra_headers"] = str(config.extra_headers).strip()
     return payload
 
 
@@ -88,13 +92,14 @@ async def get_llm_config(request: Request):
                     "model": data.get("llm_model") or "",
                     "base_url": data.get("llm_base_url") or "",
                     "provider": data.get("llm_provider") or "",
+                    "extra_headers": data.get("llm_extra_headers") or "",
                 }
             else:
                 logger.warning(f"Failed to fetch profile: {resp.status_code} {resp.text}")
     except Exception as e:
         logger.error(f"Failed to fetch profile for user {user_id}: {e}")
 
-    return {"success": True, "has_key": False, "masked_key": "", "model": "", "base_url": "", "provider": ""}
+    return {"success": True, "has_key": False, "masked_key": "", "model": "", "base_url": "", "provider": "", "extra_headers": ""}
 
 
 @router.post("/llm")
@@ -161,6 +166,7 @@ class LLMTestConfig(BaseModel):
     qwen_api_key: str = ""
     model: str | None = None
     base_url: str | None = None
+    extra_headers: str | None = None  # 自定义请求头（JSON 文本）
 
 
 @router.post("/llm/test")
@@ -179,11 +185,13 @@ async def test_llm_config(request: Request, config: LLMTestConfig):
     if not model:
         raise HTTPException(status_code=400, detail="请填写模型名称后再测试")
 
-    # 拼接 OpenAI 兼容的 chat 端点；兼容 base_url 带/不带 /v1
-    endpoint = base_url.rstrip("/")
-    if not endpoint.endswith("/v1"):
-        endpoint += "/v1"
-    endpoint += "/chat/completions"
+    # 与实际调用共用同一套 URL 拼接 + 自定义头，避免「测试通过、实际 404/400」
+    from backend.services.engine.alpha_agent.llm_client import (
+        openai_chat_url,
+        parse_extra_headers,
+    )
+
+    endpoint = openai_chat_url(base_url)
 
     payload = {
         "model": model,
@@ -193,6 +201,7 @@ async def test_llm_config(request: Request, config: LLMTestConfig):
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        **parse_extra_headers(config.extra_headers),
     }
 
     try:

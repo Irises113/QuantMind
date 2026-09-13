@@ -80,12 +80,18 @@ async def parse_intent(message: str, history: list[dict] | None = None) -> dict:
     messages.append({"role": "user", "content": message})
 
     try:
+        from backend.services.engine.alpha_agent.llm_client import (
+            env_extra_headers,
+            openai_chat_url,
+        )
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{base_url}/chat/completions",
+                openai_chat_url(base_url),
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    **env_extra_headers(),
                 },
                 json={
                     "model": model,

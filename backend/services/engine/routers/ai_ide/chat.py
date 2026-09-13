@@ -90,11 +90,19 @@ class KnowledgeBase:
 
 
 class QuantAgent:
-    def __init__(self, api_key: str, base_url: str, model: str, project_root: str):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        project_root: str,
+        extra_headers: dict[str, str] | None = None,
+    ):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.project_root = project_root
+        self.extra_headers = extra_headers or {}
         self.kb = KnowledgeBase(project_root)
         self.skill_engine = SkillEngine()
         self._kb_context_cached = None
@@ -315,6 +323,7 @@ def get_strategy_config():
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            **self.extra_headers,
         }
         payload = {
             "model": self.model,
@@ -323,10 +332,12 @@ def get_strategy_config():
             "temperature": 0.1,
         }
 
+        from backend.services.engine.alpha_agent.llm_client import openai_chat_url
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             async with client.stream(
                 "POST",
-                f"{self.base_url}/chat/completions",
+                openai_chat_url(self.base_url),
                 headers=headers,
                 json=payload,
             ) as response:
@@ -415,6 +426,7 @@ async def chat_completions(request: Request, item: ChatRequest):
     api_key = ""
     base_url = ""
     model = ""
+    extra_headers: dict[str, str] = {}
     user_context = getattr(request.state, "user", None)
     if user_context:
         user_id = user_context.get("user_id")
@@ -423,7 +435,7 @@ async def chat_completions(request: Request, item: ChatRequest):
             async with get_session(read_only=True) as session:
                 result = await session.execute(
                     text(
-                        "SELECT api_key, llm_base_url, llm_model "
+                        "SELECT api_key, llm_base_url, llm_model, llm_extra_headers "
                         "FROM user_profiles WHERE user_id = :user_id"
                     ),
                     {"user_id": user_id}
@@ -431,6 +443,9 @@ async def chat_completions(request: Request, item: ChatRequest):
                 row = result.fetchone()
                 if row and row[0] and row[1] and row[2]:
                     api_key, base_url, model = row[0], row[1], row[2]
+                    if len(row) > 3 and row[3]:
+                        from backend.services.engine.alpha_agent.llm_client import parse_extra_headers
+                        extra_headers = parse_extra_headers(row[3])
         except Exception as e:
             logger.warning(
                 f"Could not fetch individual LLM config for user {user_id}: {e}"
@@ -444,6 +459,8 @@ async def chat_completions(request: Request, item: ChatRequest):
             cfg = resolve_llm_config()
             if cfg is not None:
                 api_key, base_url, model = cfg.api_key, cfg.base_url, cfg.model
+                if not extra_headers:
+                    extra_headers = dict(cfg.headers)
         except Exception as e:
             logger.warning(f"resolve_llm_config failed: {e}")
     base_url = base_url or "https://api.deepseek.com"
@@ -454,7 +471,8 @@ async def chat_completions(request: Request, item: ChatRequest):
     # 打印非敏感初始化参数以便诊断
     masked_key = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else "***"
     logger.info(
-        f"Initializing QuantAgent: model={model}, base_url={base_url}, api_key={masked_key}"
+        f"Initializing QuantAgent: model={model}, base_url={base_url}, api_key={masked_key}, "
+        f"extra_headers={list(extra_headers.keys())}"
     )
 
     # 检测 mock key
@@ -465,7 +483,7 @@ async def chat_completions(request: Request, item: ChatRequest):
             status_code=500, detail="API Key 未配置。请在个人中心配置您的 API Key。"
         )
 
-    agent = QuantAgent(api_key, base_url, model, project_root)
+    agent = QuantAgent(api_key, base_url, model, project_root, extra_headers=extra_headers)
 
     context = {
         "current_code": item.current_code,

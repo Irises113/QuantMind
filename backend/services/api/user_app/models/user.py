@@ -114,6 +114,7 @@ class UserProfile(Base):
     llm_base_url = Column(String(512), comment="LLM API 接口地址（OpenAI 兼容 base_url）")
     llm_model = Column(String(128), comment="LLM 模型名称")
     llm_provider = Column(String(32), comment="LLM 供应商（deepseek/qwen 等）")
+    llm_extra_headers = Column(Text, comment="LLM 自定义请求头（JSON 文本，如自建网关鉴权头）")
 
     # 审计字段
     created_at = Column(

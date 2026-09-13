@@ -175,6 +175,7 @@ class ModelConfig:
     timeout: int = 60
     retry_attempts: int = 3
     custom_params: dict[str, Any] = field(default_factory=dict)
+    extra_headers: dict[str, str] = field(default_factory=dict)
 
 
 class BaseAIProvider(ABC):

@@ -23,7 +23,7 @@ const PROVIDERS: ProviderMeta[] = [
     id: 'deepseek',
     label: 'DeepSeek（深度求索）',
     baseUrls: [
-      { id: 'openai', label: 'OpenAI 兼容', url: 'https://api.deepseek.com' },
+      { id: 'openai', label: 'OpenAI 兼容', url: 'https://api.deepseek.com/v1' },
       { id: 'anthropic', label: 'Anthropic 兼容', url: 'https://api.deepseek.com/anthropic' },
     ],
     defaultBaseUrlId: 'openai',
@@ -86,6 +86,8 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
   const [selectedModel, setSelectedModel] = useState<string>(PROVIDERS[0].defaultModel);
   const [customModel, setCustomModel] = useState('');
   const [isCustomModel, setIsCustomModel] = useState(false);
+  // 自定义请求头（JSON 文本），用于自建网关鉴权等（如 x-opencode-session）
+  const [extraHeaders, setExtraHeaders] = useState('');
 
   useEffect(() => {
     loadApiKeyStatus();
@@ -98,6 +100,7 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
       const result = await userCenterService.getLLMConfig();
       setHasKey(result.has_key || false);
       setMaskedKey(result.masked_key || '');
+      setExtraHeaders(((result as any).extra_headers as string) || '');
 
       // 恢复供应商
       const savedProvider = (result.provider as string) || '';
@@ -187,7 +190,7 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
 
     setIsSaving(true);
     try {
-      await userCenterService.saveLLMConfig(trimmedKey, model, baseUrl, providerId);
+      await userCenterService.saveLLMConfig(trimmedKey, model, baseUrl, providerId, extraHeaders);
       message.success(trimmedKey ? `${meta.label} 配置保存成功` : '模型与接口地址已更新');
       setApiKey('');
       await loadApiKeyStatus();
@@ -235,7 +238,7 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
 
     setIsTesting(true);
     try {
-      const result = await userCenterService.testLLMConfig(trimmedKey, model, baseUrl);
+      const result = await userCenterService.testLLMConfig(trimmedKey, model, baseUrl, extraHeaders);
       if (result && result.success) {
         message.success(result.message || '连接成功');
       } else {
@@ -383,6 +386,21 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
                 />
               )}
             </div>
+          </div>
+
+          {/* 自定义请求头（可选） */}
+          <div className="space-y-1.5 border-t border-gray-100 pt-3">
+            <label className="text-xs font-medium text-gray-600">自定义请求头（可选）</label>
+            <Input.TextArea
+              value={extraHeaders}
+              onChange={(e) => setExtraHeaders(e.target.value)}
+              placeholder='JSON，例如 {"x-opencode-session": "xxxxxxxx"}'
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              className="!rounded-[8px] !text-xs !font-mono"
+            />
+            <p className="text-[11px] text-gray-400">
+              部分自建网关需额外鉴权头（如 x-opencode-session）；留空则不发送。
+            </p>
           </div>
 
           {/* 下方：API Key */}

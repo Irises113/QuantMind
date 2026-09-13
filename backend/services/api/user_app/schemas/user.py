@@ -102,6 +102,9 @@ class UserProfileUpdate(BaseModel):
     )
     llm_model: str | None = Field(None, max_length=128, description="LLM 模型名称")
     llm_provider: str | None = Field(None, max_length=32, description="LLM 供应商（deepseek/qwen 等）")
+    llm_extra_headers: str | None = Field(
+        None, max_length=4096, description="LLM 自定义请求头（JSON 文本，如自建网关鉴权头）"
+    )
 
 
 # ============ 响应模型 ============
@@ -145,6 +148,8 @@ class UserProfileResponse(BaseModel):
     api_key: str | None = Field(None, description="API Key（全系统通用）")
     llm_base_url: str | None = Field(None, description="LLM API 接口地址")
     llm_model: str | None = Field(None, description="LLM 模型名称")
+    llm_provider: str | None = Field(None, description="LLM 供应商")
+    llm_extra_headers: str | None = Field(None, description="LLM 自定义请求头（JSON 文本）")
     created_at: datetime
     updated_at: datetime | None
 

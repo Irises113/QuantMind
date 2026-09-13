@@ -14,6 +14,11 @@ from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 import requests
 
+from backend.services.engine.alpha_agent.llm_client import (
+    env_extra_headers,
+    openai_chat_url,
+)
+
 if TYPE_CHECKING:
     from ..models import StrategyConversionRequest, StrategyConversionResponse
 
@@ -44,7 +49,7 @@ class QwenLLM:
             "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
         self.base_url = str(base_url).rstrip("/")
-        self.endpoint = f"{self.base_url}/chat/completions"
+        self.endpoint = openai_chat_url(self.base_url)
 
         # 模型配置
         self.model = os.getenv("QWEN_MODEL", "qwen3.6-plus")
@@ -70,6 +75,7 @@ class QwenLLM:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            **env_extra_headers(),
         }
 
         last_exc = None
@@ -121,7 +127,7 @@ class QwenProvider(BaseLLMProvider):
             "DASHSCOPE_BASE_URL",
             "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
-        self.endpoint = f"{self.base_url.rstrip('/')}/chat/completions"
+        self.endpoint = openai_chat_url(self.base_url)
 
     async def generate(self, req: StrategyGenerationRequest) -> StrategyGenerationResult:
         """使用千问生成策略代码"""
@@ -148,6 +154,7 @@ class QwenProvider(BaseLLMProvider):
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                **env_extra_headers(),
             }
 
             import asyncio
@@ -198,6 +205,7 @@ class QwenProvider(BaseLLMProvider):
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                **env_extra_headers(),
             }
 
             import asyncio

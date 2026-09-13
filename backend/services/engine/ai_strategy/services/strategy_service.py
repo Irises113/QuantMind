@@ -11,6 +11,11 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from backend.services.engine.alpha_agent.llm_client import (
+    env_extra_headers,
+    openai_chat_url,
+)
+
 from ..core import (
     create_fallback_strategy_result,
     extract_json_from_content,
@@ -151,7 +156,7 @@ class StrategyService:
         try:
             async with self.client.stream(
                 "POST",
-                f"{self.api_url}/chat/completions",
+                openai_chat_url(self.api_url),
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
@@ -217,7 +222,7 @@ class StrategyService:
         try:
             async with self.client.stream(
                 "POST",
-                f"{self.api_url}/chat/completions",
+                openai_chat_url(self.api_url),
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
@@ -310,10 +315,11 @@ class StrategyService:
             system_prompt = "你是一个专业的量化交易专家。请返回JSON格式的策略代码，包含完整的交易逻辑。代码中使用简体中文注释，确保注释清晰易懂。"
 
         response = await self.client.post(
-            f"{self.api_url}/chat/completions",
+            openai_chat_url(self.api_url),
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                **env_extra_headers(),
             },
             json={
                 "model": self.model,
