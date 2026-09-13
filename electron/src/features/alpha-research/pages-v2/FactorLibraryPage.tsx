@@ -18,6 +18,8 @@ import {
   AlertCircle,
   Play,
   X,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useTaskContext } from '../context-v2/TaskContext';
 
@@ -46,6 +48,7 @@ export const FactorLibraryPage: React.FC<{ onNavigate?: (page: string) => void }
   const [universes, setUniverses] = useState<UniverseInfo[]>([]);
   const [markets, setMarkets] = useState<MarketInfo[]>([]);
   const [selectedFactor, setSelectedFactor] = useState<any | null>(null);
+  const [copiedExpr, setCopiedExpr] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -169,6 +172,35 @@ export const FactorLibraryPage: React.FC<{ onNavigate?: (page: string) => void }
     setFilteredFactors(filtered);
   };
 
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleCopyExpression = async () => {
+    const expr = selectedFactor?.factorExpression || selectedFactor?.factor_expression || '';
+    if (!expr) return;
+    if (await copyToClipboard(expr)) {
+      setCopiedExpr(true);
+      setTimeout(() => setCopiedExpr(false), 1500);
+    }
+  };
+
   const handleExport = () => {
     const dataStr = JSON.stringify(factors, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
@@ -242,58 +274,42 @@ export const FactorLibraryPage: React.FC<{ onNavigate?: (page: string) => void }
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="glass card-hover">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm text-muted-foreground">总因子数</div>
-                <div className="text-2xl font-bold mt-1">{stats.total}</div>
-              </div>
-              <div className="p-3 rounded-lg bg-primary/20">
-                <BarChart3 className="h-6 w-6 text-primary" />
-              </div>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center gap-1">
+            <div className="p-3 rounded-lg bg-primary/20">
+              <BarChart3 className="h-6 w-6 text-primary" />
             </div>
+            <div className="text-sm text-muted-foreground">总因子数</div>
+            <div className="text-2xl font-bold">{stats.total}</div>
           </CardContent>
         </Card>
 
         <Card className="glass card-hover">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm text-muted-foreground">高质量</div>
-                <div className="text-2xl font-bold mt-1 text-success">{stats.high}</div>
-              </div>
-              <div className="p-3 rounded-lg bg-success/20">
-                <TrendingUp className="h-6 w-6 text-success" />
-              </div>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center gap-1">
+            <div className="p-3 rounded-lg bg-success/20">
+              <TrendingUp className="h-6 w-6 text-success" />
             </div>
+            <div className="text-sm text-muted-foreground">高质量</div>
+            <div className="text-2xl font-bold text-success">{stats.high}</div>
           </CardContent>
         </Card>
 
         <Card className="glass card-hover">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm text-muted-foreground">中等质量</div>
-                <div className="text-2xl font-bold mt-1 text-warning">{stats.medium}</div>
-              </div>
-              <div className="p-3 rounded-lg bg-warning/20">
-                <BarChart3 className="h-6 w-6 text-warning" />
-              </div>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center gap-1">
+            <div className="p-3 rounded-lg bg-warning/20">
+              <BarChart3 className="h-6 w-6 text-warning" />
             </div>
+            <div className="text-sm text-muted-foreground">中等质量</div>
+            <div className="text-2xl font-bold text-warning">{stats.medium}</div>
           </CardContent>
         </Card>
 
         <Card className="glass card-hover">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm text-muted-foreground">低质量</div>
-                <div className="text-2xl font-bold mt-1 text-destructive">{stats.low}</div>
-              </div>
-              <div className="p-3 rounded-lg bg-destructive/20">
-                <BarChart3 className="h-6 w-6 text-destructive" />
-              </div>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center gap-1">
+            <div className="p-3 rounded-lg bg-destructive/20">
+              <BarChart3 className="h-6 w-6 text-destructive" />
             </div>
+            <div className="text-sm text-muted-foreground">低质量</div>
+            <div className="text-2xl font-bold text-destructive">{stats.low}</div>
           </CardContent>
         </Card>
       </div>
@@ -576,7 +592,18 @@ export const FactorLibraryPage: React.FC<{ onNavigate?: (page: string) => void }
 
               {/* Expression */}
               <div>
-                <h4 className="text-sm font-medium mb-2">因子表达式</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-medium">因子表达式</h4>
+                  <button
+                    type="button"
+                    onClick={handleCopyExpression}
+                    className="inline-flex items-center gap-1 rounded-md border border-border/60 px-2 py-1 text-xs text-muted-foreground hover:text-primary hover:bg-secondary/40 transition-colors"
+                    title="拷贝因子表达式"
+                  >
+                    {copiedExpr ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copiedExpr ? '已拷贝' : '拷贝'}
+                  </button>
+                </div>
                 <div className="rounded-lg bg-secondary/30 p-4">
                   <code className="text-sm font-mono break-all">
                     {selectedFactor.factorExpression || selectedFactor.factor_expression || ''}
