@@ -515,6 +515,8 @@ class SimulationEngine:
             quantity=order.quantity,
             price=order.price,
             strategy_id=int(strategy_id) if strategy_id.isdigit() else None,
+            remarks=(str(order.reason).strip()[:500] if getattr(order, "reason", None) else None)
+            or "策略托管自动调仓",
         )
         db.add(sim_order)
         await db.flush()

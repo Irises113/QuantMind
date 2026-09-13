@@ -18,6 +18,19 @@ def isoformat_dt(value: datetime | None) -> str | None:
     return value.isoformat(sep=" ", timespec="seconds")
 
 
+SOURCE_REMARKS = {
+    "hosted": "策略托管自动调仓",
+    "risk": "风控规则触发平仓",
+}
+
+
+def display_remarks(source: str, remarks: str | None) -> str:
+    text = str(remarks or "").strip()
+    if text:
+        return text
+    return SOURCE_REMARKS.get(source, "自动交易")
+
+
 def classify_auto_source(strategy_id: Any, remarks: str | None) -> str | None:
     """Return hosted/risk if this looks like an automatic order, else None."""
     text = str(remarks or "")

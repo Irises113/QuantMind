@@ -1,5 +1,6 @@
 from backend.services.live_trading.services.admin_order_view import (
     classify_auto_source,
+    display_remarks,
     planned_dedup_key,
 )
 
@@ -18,6 +19,12 @@ def test_classify_manual_orders_excluded():
     assert classify_auto_source(None, "用户手动下单") is None
     assert classify_auto_source(0, None) is None
     assert classify_auto_source("", None) is None
+
+
+def test_display_remarks_fallback_when_empty():
+    assert display_remarks("hosted", None) == "策略托管自动调仓"
+    assert display_remarks("risk", "  ") == "风控规则触发平仓"
+    assert display_remarks("hosted", "risk_rule:止损") == "risk_rule:止损"
 
 
 def test_planned_dedup_key():

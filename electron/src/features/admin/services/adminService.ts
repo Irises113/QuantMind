@@ -20,6 +20,7 @@ import {
     RiskDryRunItem,
     AdminOrderHistoryItem,
     AdminPlannedOrderItem,
+    AdminInferenceMonitor,
 } from '../types';
 import { authService } from '../../auth/services/authService';
 import { SERVICE_ENDPOINTS, resolveWebSafeServiceBase } from '../../../config/services';
@@ -676,6 +677,16 @@ class AdminService {
 
     async listPlannedOrders(): Promise<AdminPlannedOrderItem[]> {
         const resp = await this.axiosInstance.get('/admin/orders/planned');
+        return this.unwrap(resp.data);
+    }
+
+    async getInferenceMonitor(params?: {
+        status?: string;
+        user_id?: string;
+        model_id?: string;
+        limit?: number;
+    }): Promise<AdminInferenceMonitor> {
+        const resp = await this.axiosInstance.get('/admin/inference/monitor', { params });
         return this.unwrap(resp.data);
     }
 }

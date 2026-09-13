@@ -12,6 +12,7 @@ from sqlalchemy import or_, select
 from backend.services.api.user_app.middleware.auth import require_admin
 from backend.services.live_trading.services.admin_order_view import (
     classify_auto_source,
+    display_remarks,
     enum_value,
     isoformat_dt,
     planned_dedup_key,
@@ -78,7 +79,7 @@ def _history_item(
         "status": status,
         "created_at": isoformat_dt(created_at),
         "filled_at": isoformat_dt(filled_at),
-        "remarks": remarks,
+        "remarks": display_remarks(source, remarks),
     }
 
 

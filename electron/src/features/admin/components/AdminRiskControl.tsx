@@ -376,10 +376,13 @@ export const AdminRiskControl: React.FC = () => {
                 open={drawerOpen}
                 width={460}
                 onClose={() => setDrawerOpen(false)}
-                extra={
-                    <Button type="primary" onClick={() => void submitRule()}>
-                        保存
-                    </Button>
+                footer={
+                    <div className="flex justify-end gap-2">
+                        <Button onClick={() => setDrawerOpen(false)}>关闭</Button>
+                        <Button type="primary" onClick={() => void submitRule()}>
+                            保存
+                        </Button>
+                    </div>
                 }
             >
                 <Form form={form} layout="vertical" initialValues={defaultForm}>

@@ -55,7 +55,7 @@ const AdminPage: React.FC = () => {
             label: '推理引擎',
             children: [
                 { key: 'models', label: '模型管理' },
-                { key: 'inference', label: '推理监控（开发中）' },
+                { key: 'inference', label: '推理监控' },
             ]
         },
         {
@@ -140,12 +140,24 @@ const AdminPage: React.FC = () => {
                 </header>
 
                 {/* Content Container */}
-                <main className="flex-1 overflow-y-auto px-6 pt-6 pb-[60px] bg-slate-50/50">
-                    {/* 资讯监控 / RD 因子挖掘等大屏页面用全宽，其余保留 1400px 阅读宽度 */}
+                <main
+                    className={`flex-1 px-6 pt-6 pb-[60px] bg-slate-50/50 ${
+                        ['orders', 'risk', 'inference'].includes(currentKey)
+                            ? 'overflow-hidden flex flex-col min-h-0'
+                            : 'overflow-y-auto'
+                    }`}
+                >
+                    {/* 资讯监控 / 订单 / 风控等大屏页面用全宽，其余保留 1400px 阅读宽度 */}
                     <div
                         className={
-                            ['news', 'inference', 'tags', 'settings', 'stock-pools'].includes(currentKey)
-                                ? 'w-full animate-in fade-in slide-in-from-bottom-4 duration-500'
+                            ['news', 'inference', 'tags', 'settings', 'stock-pools', 'orders', 'risk'].includes(currentKey)
+                                ? `min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-500 ${
+                                      ['orders', 'risk'].includes(currentKey)
+                                          ? 'flex w-full flex-1 flex-col'
+                                          : currentKey === 'inference'
+                                            ? 'mx-auto flex w-full max-w-[1400px] flex-1 flex-col'
+                                            : 'h-full w-full'
+                                  }`
                                 : 'max-w-[1400px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500'
                         }
                     >

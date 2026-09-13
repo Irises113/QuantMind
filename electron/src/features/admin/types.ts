@@ -519,6 +519,55 @@ export interface AdminPlannedOrderItem {
     detail?: string | null;
 }
 
+export interface AdminInferenceDispatchItem {
+    id: string;
+    trigger_source?: string | null;
+    tenant_id?: string | null;
+    user_id: string;
+    strategy_id?: string | null;
+    model_id?: string | null;
+    data_trade_date?: string | null;
+    prediction_trade_date?: string | null;
+    status: string;
+    reason_code?: string | null;
+    reason_label?: string | null;
+    reason_detail?: string | null;
+    run_id?: string | null;
+    created_at?: string | null;
+}
+
+export interface AdminInferenceSettingItem {
+    tenant_id: string;
+    user_id: string;
+    model_id: string;
+    schedule_time?: string | null;
+    last_run_id?: string | null;
+    next_run_at?: string | null;
+    updated_at?: string | null;
+}
+
+export interface AdminInferenceMonitor {
+    schedule: {
+        enabled: boolean;
+        cron: string;
+        timezone: string;
+        next_run_at?: string | null;
+        task: string;
+    };
+    summary: {
+        total: number;
+        success: number;
+        failed: number;
+        skipped: number;
+        today_success: number;
+        today_failed: number;
+        today_skipped: number;
+        latest_at?: string | null;
+    };
+    settings: AdminInferenceSettingItem[];
+    items: AdminInferenceDispatchItem[];
+}
+
 export interface RiskDryRunItem {
     rule_id?: number | null;
     rule_name: string;
