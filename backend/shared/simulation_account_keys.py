@@ -59,6 +59,22 @@ def account_lookup_keys(
     return keys
 
 
+def ledger_user_id_candidates(user_id: object) -> list[str]:
+    """PG 台账/资金快照查询用的 user_id 候选。
+
+    数字 sub（``00000001``）与 require_sim_user_id 对齐，优先 ``1``，再带 zfill(8)。
+    不要把数字用户拼进保留账户 ``0``，否则同日快照会误命中空的 admin 账。
+    非数字（OSS admin）才回落到 ``0``。
+    """
+    raw = str(user_id or "").strip()
+    if not raw:
+        return ["0"]
+    if raw.isdigit():
+        as_int = str(int(raw))
+        return list(dict.fromkeys([as_int, as_int.zfill(8)]))
+    return list(dict.fromkeys([raw, "0"]))
+
+
 def settings_key(tenant_id: str | None, user_id: object) -> str:
     return f"{SETTINGS_KEY_PREFIX}{normalize_tenant(tenant_id)}:{str(user_id).strip()}"
 

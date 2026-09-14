@@ -3,7 +3,7 @@ import json
 import pytest
 
 from backend.services.trade_shared.simulation_manager import SimulationAccountManager
-from backend.shared.simulation_account_keys import account_lookup_keys
+from backend.shared.simulation_account_keys import account_lookup_keys, ledger_user_id_candidates
 
 
 class _FakeRedisClient:
@@ -125,3 +125,10 @@ def test_account_lookup_keys_covers_int_and_zfill():
     assert keys[0] == "simulation:account:default:00000001"
     assert "simulation:account:default:1" in keys
     assert keys == list(dict.fromkeys(keys))
+
+
+def test_ledger_user_id_candidates_does_not_mix_numeric_user_with_reserved_zero():
+    assert ledger_user_id_candidates("00000001") == ["1", "00000001"]
+    assert ledger_user_id_candidates("1") == ["1", "00000001"]
+    assert ledger_user_id_candidates("admin") == ["admin", "0"]
+    assert "0" not in ledger_user_id_candidates("00000001")

@@ -468,27 +468,27 @@ async def _fetch_sim_fund_fallback(
     最新资金快照，把账户级收益归因给活跃策略（与原 portfolio 快照口径一致）。
     无快照返回 None，调用方保持原值。
     """
-    sub = str(user_sub or "").strip()
-    # JWT sub -> 模拟盘 uid（与 trade_shared.require_sim_user_id 同规则）：
-    # 数字直接用，非数字（OSS 默认 admin）归保留账户 0。
-    # 末尾恒带 "0"：OSS 单用户/策略 runner 落 0 号账户，数字 sub 也能命中。
-    sim_uid = sub if sub.isdigit() else "0"
-    candidates = []
-    for c in (sim_uid, sub, "0"):
-        if c and c not in candidates:
-            candidates.append(c)
+    from backend.shared.simulation_account_keys import ledger_user_id_candidates
+
+    candidates = ledger_user_id_candidates(user_sub)
+    preferred = candidates[0]
     try:
         async with get_session(read_only=True) as session:
             placeholders = ",".join(f":u{i}" for i in range(len(candidates)))
-            params: dict[str, Any] = {"tid": str(tenant_id or "default")}
+            params: dict[str, Any] = {
+                "tid": str(tenant_id or "default"),
+                "preferred": preferred,
+            }
             params.update({f"u{i}": c for i, c in enumerate(candidates)})
             row = (
                 await session.execute(
                     text(
                         "SELECT total_asset, today_pnl, total_pnl, initial_capital "
                         "FROM simulation_fund_snapshots "
-                        f"WHERE tenant_id = :tid AND user_id IN ({placeholders}) "
-                        "ORDER BY snapshot_date DESC LIMIT 1"
+                        f"WHERE tenant_id = :tid AND CAST(user_id AS varchar) IN ({placeholders}) "
+                        "ORDER BY snapshot_date DESC, "
+                        "CASE WHEN CAST(user_id AS varchar) = :preferred THEN 0 ELSE 1 END "
+                        "LIMIT 1"
                     ),
                     params,
                 )
@@ -716,29 +716,25 @@ async def list_user_strategies(
                 trade_daily_pnl = (trading_status or {}).get("daily_pnl")
                 if trade_daily_pnl is None and isinstance(trade_portfolio, dict):
                     trade_daily_pnl = trade_portfolio.get("daily_pnl")
-                if trade_today_return is not None:
-                    today_return = _to_float(trade_today_return, today_return)
-                elif trade_daily_pnl is not None and isinstance(trade_portfolio, dict):
-                    initial_capital = _to_float(
-                        trade_portfolio.get("initial_capital"), 0.0
-                    )
-                    if initial_capital > 0:
-                        today_return = (
-                            _to_float(trade_daily_pnl, 0.0) / initial_capital * 100.0
-                        )
-                if trade_daily_pnl is not None:
-                    today_pnl = _to_float(trade_daily_pnl, 0.0)
-                # 模拟盘无 portfolios 行时 portfolio 快照为 None，上面全是 None；
-                # 用模拟账户资金快照兜底，否则活跃策略收益恒为 0。
-                if (
-                    trade_daily_pnl is None
-                    and trade_today_return is None
-                    and sim_fund is not None
-                ):
+                # 模拟盘收益以资金快照为准，避免空 portfolios 行的 0 盈亏盖住真实账户。
+                if sim_mode == "SIMULATION" and sim_fund is not None:
                     today_pnl = float(sim_fund["today_pnl"])
                     today_return = float(sim_fund["today_return"])
                     if total_return == 0.0:
                         total_return = float(sim_fund["total_return"])
+                else:
+                    if trade_today_return is not None:
+                        today_return = _to_float(trade_today_return, today_return)
+                    elif trade_daily_pnl is not None and isinstance(trade_portfolio, dict):
+                        initial_capital = _to_float(
+                            trade_portfolio.get("initial_capital"), 0.0
+                        )
+                        if initial_capital > 0:
+                            today_return = (
+                                _to_float(trade_daily_pnl, 0.0) / initial_capital * 100.0
+                            )
+                    if trade_daily_pnl is not None:
+                        today_pnl = _to_float(trade_daily_pnl, 0.0)
             execution_latency_ms = None
             if summary_execution_latency is not None:
                 try:
