@@ -8,6 +8,8 @@
 
 export interface StrategyTemplate {
   id: string;
+  /** 展示排序，默认 Top-K 为 1 */
+  sort?: number;
   name: string;
   description: string;
   category: 'basic' | 'advanced' | 'risk_control';
@@ -35,6 +37,7 @@ export interface StrategyTemplate {
 export const QLIB_STRATEGY_TEMPLATES: StrategyTemplate[] = [
   {
     id: 'standard_topk',
+    sort: 1,
     name: '默认 Top-K 选股策略',
     description: '最经典的量化选股逻辑。每日截面排名，精选最具潜力的 Top-K 标的，等权持仓。',
     category: 'basic',

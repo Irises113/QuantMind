@@ -100,3 +100,4 @@ async def test_perform_sync_skips_existing_type_tag_and_name(monkeypatch):
     assert count == 1
     assert saved[0]["name"] == "新策略"
     assert saved[0]["metadata"]["parameters"]["strategy_type"] == "new_one"
+    assert saved[0]["metadata"]["parameters"]["sort"] == 100

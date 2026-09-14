@@ -66,7 +66,12 @@ async def sync_builtin_templates(user_id: str) -> int:
                 "tags": [t.category, t.difficulty, "SystemSync", f"template:{t.id}"],
                 "status": "ACTIVE",
                 "is_verified": True,
-                "parameters": {"strategy_type": t.id, "topk": 50, "signal": "<PRED>"},
+                "parameters": {
+                    "strategy_type": t.id,
+                    "topk": 50,
+                    "signal": "<PRED>",
+                    "sort": int(getattr(t, "sort", 100) or 100),
+                },
             },
         )
         synced_count += 1
