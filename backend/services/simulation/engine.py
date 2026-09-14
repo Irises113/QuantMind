@@ -48,6 +48,7 @@ from backend.services.simulation.services.signal_loader import (
 )
 from backend.services.simulation.services.simulation_manager import (
     SimulationAccountManager,
+    canonical_sim_uid,
 )
 from backend.services.trade_shared.trade_config import settings
 from backend.shared.database_manager_v2 import get_session
@@ -238,7 +239,7 @@ class SimulationEngine:
                 # 3. 获取当前账户状态（按市场隔离）
                 self._ensure_redis()
                 account_data = await self.account_manager.get_account(
-                    user_id=int(uid) if uid.isdigit() else 0,
+                    user_id=canonical_sim_uid(uid),
                     tenant_id=tenant,
                     market=market.value,
                 )
@@ -312,7 +313,7 @@ class SimulationEngine:
 
                 # 8. 更新账户快照
                 updated_account = await self.account_manager.get_account(
-                    user_id=int(uid) if uid.isdigit() else 0,
+                    user_id=canonical_sim_uid(uid),
                     tenant_id=tenant,
                     market=market.value,
                 )
@@ -522,7 +523,7 @@ class SimulationEngine:
         # 创建订单对象
         sim_order = SimOrder(
             tenant_id=tenant_id,
-            user_id=int(user_id) if user_id.isdigit() else 0,
+            user_id=canonical_sim_uid(user_id),
             symbol=order.symbol,
             side=OrderSide.BUY if order.side == "BUY" else OrderSide.SELL,
             order_type=OrderType.MARKET,

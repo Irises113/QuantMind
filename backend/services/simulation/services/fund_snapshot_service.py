@@ -101,13 +101,16 @@ class SimulationFundSnapshotService:
         day_open = initial_capital
         month_open = initial_capital
         try:
+            from backend.shared.simulation_account_keys import ledger_user_id_candidates
+
+            user_ids = ledger_user_id_candidates(user_id)
             async with get_session(read_only=True) as session:
                 day_row = (
                     await session.execute(
                         select(SimulationFundSnapshot.total_asset)
                         .where(
                             SimulationFundSnapshot.tenant_id == tenant_id,
-                            SimulationFundSnapshot.user_id == user_id,
+                            SimulationFundSnapshot.user_id.in_(user_ids),
                             SimulationFundSnapshot.snapshot_date < today,
                         )
                         .order_by(SimulationFundSnapshot.snapshot_date.desc())
@@ -121,7 +124,7 @@ class SimulationFundSnapshotService:
                         select(SimulationFundSnapshot.total_asset)
                         .where(
                             SimulationFundSnapshot.tenant_id == tenant_id,
-                            SimulationFundSnapshot.user_id == user_id,
+                            SimulationFundSnapshot.user_id.in_(user_ids),
                             SimulationFundSnapshot.snapshot_date < month_start,
                         )
                         .order_by(SimulationFundSnapshot.snapshot_date.desc())

@@ -14,32 +14,46 @@ from backend.shared.trade_account_cache import read_json_cache, write_json_cache
 
 logger = logging.getLogger(__name__)
 
-# OSS 单用户部署的保留映射：JWT sub 为用户名（如 admin）时，历史模拟数据
-# （sim_orders/sim_trades PG user_id、Redis 账户键）全落在 user 0 上。
-# 改映射会丢历史，故保持 0，但用 error 日志标出，便于多用户部署时发现串号。
+# 非管理员且非数字的 JWT sub 仍落到历史保留账户 0，并打 error 便于发现串号。
+# 管理员族（admin / 00000001 / 1 / 0）一律收口为 10000001，避免 int("00000001")==1。
 RESERVED_NON_NUMERIC_USER_ID = 0
 
 
-def require_sim_user_id(raw_user_id: str, tenant_id: str = "default") -> int:
-    """JWT sub 转模拟盘 int user_id。三处路由共用，禁止各自手写分叉。
+def canonical_sim_uid(raw_user_id: object) -> int:
+    """模拟盘 int user_id：管理员族 → 10000001，其它数字保持 int，其余 → 0。"""
+    from backend.shared.simulation_account_keys import (
+        CANONICAL_ADMIN_SIM_USER,
+        is_admin_sim_user,
+    )
 
-    数字 sub 直接转 int；非数字（OSS 默认 admin 用户）归 0。
+    raw = str(raw_user_id or "").strip()
+    if is_admin_sim_user(raw):
+        return int(CANONICAL_ADMIN_SIM_USER)
+    if raw.isdigit():
+        return int(raw)
+    return RESERVED_NON_NUMERIC_USER_ID
+
+
+def require_sim_user_id(raw_user_id: str, tenant_id: str = "default") -> int:
+    """JWT sub 转模拟盘 int user_id。三处路由共用，禁止各自手写 int()/isdigit()。
+
+    管理员族收口为 10000001；其它数字 sub 直接转 int；其余非数字仍归 0。
     同时旁路记录 sub 反查映射（见 record_sim_sub），供 WS 推送定位主题。
     """
     from fastapi import HTTPException
 
-    if not raw_user_id:
+    from backend.shared.simulation_account_keys import is_admin_sim_user
+
+    if not str(raw_user_id or "").strip():
         raise HTTPException(status_code=400, detail="Invalid user_id in token")
     raw = str(raw_user_id).strip()
-    if raw.isdigit():
-        sim_user_id = int(raw)
-    else:
+    sim_user_id = canonical_sim_uid(raw)
+    if not raw.isdigit() and not is_admin_sim_user(raw):
         logger.error(
             "Non-numeric user_id mapped to reserved account 0: %s "
             "(多用户部署下不同用户名会串号，请改用数字 sub)",
             raw,
         )
-        sim_user_id = RESERVED_NON_NUMERIC_USER_ID
     record_sim_sub(sim_user_id, raw, tenant_id=tenant_id)
     return sim_user_id
 
@@ -251,14 +265,69 @@ return cjson.encode({success=true, unlocked=unlocked})
         return normalize_market(market)
 
     def _get_key(self, user_id: int, tenant_id: str, market: str = "CN") -> str:
-        from backend.shared.simulation_account_keys import account_key
+        from backend.shared.simulation_account_keys import (
+            account_key,
+            canonical_sim_user_suffix,
+        )
 
-        return account_key(tenant_id, user_id, market)
+        return account_key(tenant_id, canonical_sim_user_suffix(user_id), market)
 
     def _lookup_keys(self, user_id: int, tenant_id: str, market: str = "CN") -> list[str]:
         from backend.shared.simulation_account_keys import account_lookup_keys
 
         return account_lookup_keys(tenant_id, user_id, market)
+
+    def _settings_lookup_keys(self, user_id: int, tenant_id: str) -> list[str]:
+        from backend.shared.simulation_account_keys import settings_lookup_keys
+
+        return settings_lookup_keys(tenant_id, user_id)
+
+    def _promote_settings(self, user_id: int, tenant_id: str) -> None:
+        canonical = self._get_settings_key(user_id, tenant_id)
+        if read_json_cache(self.redis, canonical):
+            return
+        for key in self._settings_lookup_keys(user_id, tenant_id):
+            data = read_json_cache(self.redis, key)
+            if data:
+                write_json_cache(self.redis, canonical, data)
+                return
+
+    def _pick_cached_account(
+        self, user_id: int, tenant_id: str, market: str
+    ) -> dict[str, Any] | None:
+        """在 10000001 / 00000001 / 1 / 0 别名里取最像真实资金的一份，并回写规范键。"""
+        from backend.shared.simulation_account_keys import account_payload_score
+
+        canonical = self._get_key(user_id, tenant_id, market)
+        best: dict[str, Any] | None = None
+        best_score: tuple[int, float, float] | None = None
+        best_key: str | None = None
+        for key in self._lookup_keys(user_id, tenant_id, market):
+            data = read_json_cache(self.redis, key)
+            if not data:
+                continue
+            score = account_payload_score(data)
+            if (
+                best is None
+                or score > best_score
+                or (score == best_score and key == canonical)
+            ):
+                best = data
+                best_score = score
+                best_key = key
+        if best is None or best_key is None:
+            return None
+        if best_key != canonical:
+            write_json_cache(self.redis, canonical, best)
+            self._promote_settings(user_id, tenant_id)
+            logger.warning(
+                "Promoted simulation account alias %s -> %s tenant=%s user=%s",
+                best_key,
+                canonical,
+                tenant_id,
+                user_id,
+            )
+        return best
 
     def _ensure_client(self):
         """空 RedisClient（未 connect）时接到 trade 共享连接，避免 bootstrap 读不到账户。"""
@@ -273,7 +342,13 @@ return cjson.encode({success=true, unlocked=unlocked})
 
     @staticmethod
     def _exec_lock_key(user_id: int, tenant_id: str) -> str:
-        return f"simulation:exec_lock:{SimulationAccountManager._normalize_tenant(tenant_id)}:{user_id}"
+        from backend.shared.simulation_account_keys import canonical_sim_user_suffix
+
+        return (
+            "simulation:exec_lock:"
+            f"{SimulationAccountManager._normalize_tenant(tenant_id)}:"
+            f"{canonical_sim_user_suffix(user_id)}"
+        )
 
     @staticmethod
     def acquire_exec_lock(
@@ -378,9 +453,12 @@ return 0
         return parse_account_key(key)
 
     def _get_settings_key(self, user_id: int, tenant_id: str) -> str:
-        from backend.shared.simulation_account_keys import settings_key
+        from backend.shared.simulation_account_keys import (
+            canonical_sim_user_suffix,
+            settings_key,
+        )
 
-        return settings_key(tenant_id, user_id)
+        return settings_key(tenant_id, canonical_sim_user_suffix(user_id))
 
     @staticmethod
     def _position_key(symbol: str, position_side: str) -> str:
@@ -401,6 +479,13 @@ return 0
         tenant_id = self._normalize_tenant(tenant_id)
         key = self._get_settings_key(user_id, tenant_id)
         data = read_json_cache(self.redis, key)
+        if not data:
+            for alias in self._settings_lookup_keys(user_id, tenant_id):
+                data = read_json_cache(self.redis, alias)
+                if data:
+                    if alias != key:
+                        write_json_cache(self.redis, key, data)
+                    break
 
         initial_cash = float(default_initial_cash)
         last_modified_at: str | None = None
@@ -503,11 +588,7 @@ return 0
             return None
 
         tenant_id = self._normalize_tenant(tenant_id)
-        data = None
-        for key in self._lookup_keys(user_id, tenant_id, market):
-            data = read_json_cache(self.redis, key)
-            if data:
-                break
+        data = self._pick_cached_account(user_id, tenant_id, market)
         if data:
             return data
         key = self._get_key(user_id, tenant_id, market)
@@ -791,20 +872,14 @@ return 0
             return {"success": False, "reason": "REDIS_UNAVAILABLE"}
 
         tenant_id = self._normalize_tenant(tenant_id)
+        cached = self._pick_cached_account(user_id, tenant_id, market)
         key = self._get_key(user_id, tenant_id, market)
-        for candidate in self._lookup_keys(user_id, tenant_id, market):
-            if self.redis.client.get(candidate):
-                key = candidate
-                break
-
-        # 如果账户不存在，先初始化（交易时需要账户存在）。
-        # 新注册/默认用户统一按 100 万初始资金建账；
-        # 用户对初始资金的修改已废弃（模拟盘设置修改 deprecated），故不读取 settings 残留值。
-        if not self.redis.client.get(key):
+        if not cached:
+            # 交易时需要账户存在。新用户按 100 万建账，但先并入管理员历史别名，
+            # 避免把 OSS admin 历史资金覆盖成空账。
             await self.init_account(
                 user_id, initial_cash=1_000_000.0, tenant_id=tenant_id, market=market
             )
-            key = self._get_key(user_id, tenant_id, market)
 
         if (
             is_margin_trade
@@ -860,11 +935,8 @@ return 0
             return {"success": False, "reason": "REDIS_UNAVAILABLE"}
 
         tenant_id = self._normalize_tenant(tenant_id)
+        self._pick_cached_account(user_id, tenant_id, market)
         key = self._get_key(user_id, tenant_id, market)
-        for candidate in self._lookup_keys(user_id, tenant_id, market):
-            if self.redis.client.get(candidate):
-                key = candidate
-                break
 
         try:
             result = self.redis.client.eval(self._unlock_t1_lua, 1, key)

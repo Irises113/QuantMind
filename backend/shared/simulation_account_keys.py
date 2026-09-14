@@ -14,6 +14,11 @@ from __future__ import annotations
 ACCOUNT_KEY_PREFIX = "simulation:account:"
 SETTINGS_KEY_PREFIX = "simulation:settings:"
 
+# 与 backend.shared.admin_identity.ADMIN_USER_ID 保持一致。本模块保持纯标准库，
+# 供沙箱子进程 import，禁止反向依赖 admin_identity（会拉 SQLAlchemy）。
+CANONICAL_ADMIN_SIM_USER = "10000001"
+_ADMIN_SIM_TOKENS = frozenset({"0", "1", "00000001", "10000001", "admin"})
+
 
 def normalize_tenant(tenant_id: str | None) -> str:
     return (tenant_id or "").strip() or "default"
@@ -36,22 +41,66 @@ def account_key(tenant_id: str | None, user_id: object, market: str | None = "CN
     return f"{ACCOUNT_KEY_PREFIX}{tenant}:{user}:{normalize_market(market)}"
 
 
+def is_admin_sim_user(user_id: object) -> bool:
+    """OSS 管理员模拟账户族：10000001 及历史 admin / 00000001 / 1 / 0。"""
+    raw = str(user_id or "").strip()
+    if raw in _ADMIN_SIM_TOKENS:
+        return True
+    if raw.isdigit() and str(int(raw)) in {"0", "1", "10000001"}:
+        return True
+    return False
+
+
+def canonical_sim_user_suffix(user_id: object) -> str:
+    """模拟账户 Redis 规范后缀。管理员族一律写 10000001。"""
+    if is_admin_sim_user(user_id):
+        return CANONICAL_ADMIN_SIM_USER
+    return str(user_id or "").strip() or "0"
+
+
+def _user_id_aliases(user_id: object) -> list[str]:
+    """同一模拟账户可能出现的 user 后缀。
+
+    规范 ID 是 ``10000001``（8 位且不以 0 开头，int 后不变）。历史键还有
+    ``00000001``（int 成 1）、``admin`` 非数字落到 ``0``。这些必须互相能读到，
+    否则仪表盘全 0、策略对着空账跑。其它数字用户（42）绝不掺进管理员族。
+    """
+    raw = str(user_id or "").strip()
+    aliases: list[str] = []
+
+    def _add(value: object) -> None:
+        text = str(value).strip()
+        if text and text not in aliases:
+            aliases.append(text)
+
+    _add(raw)
+    if is_admin_sim_user(raw):
+        for token in (
+            CANONICAL_ADMIN_SIM_USER,
+            "00000001",
+            "1",
+            "0",
+            "admin",
+        ):
+            _add(token)
+        return aliases
+
+    if raw.isdigit():
+        as_int = str(int(raw))
+        _add(as_int)
+        _add(as_int.zfill(8))
+    else:
+        _add("0")
+    return aliases or ["0"]
+
+
 def account_lookup_keys(
     tenant_id: str | None, user_id: object, market: str | None = "CN"
 ) -> list[str]:
-    """读取账户时的候选键：调用方原样 + 数字用户的 int / zfill(8) 别名。
-
-    重置接口用 require_sim_user_id → int（``simulation:account:default:1``），
-    JWT sub 却是 ``00000001``。读写任一口径都应能命中，避免 bootstrap 报账户不存在。
-    """
+    """读取账户时的候选键：调用方原样 + 数字用户的 int / zfill(8) / 管理员历史 0。"""
     seen: set[str] = set()
     keys: list[str] = []
-    candidates: list[object] = [user_id]
-    raw = str(user_id or "").strip()
-    if raw.isdigit():
-        as_int = str(int(raw))
-        candidates.extend([as_int, as_int.zfill(8)])
-    for candidate in candidates:
+    for candidate in _user_id_aliases(user_id):
         key = account_key(tenant_id, candidate, market)
         if key not in seen:
             seen.add(key)
@@ -60,23 +109,51 @@ def account_lookup_keys(
 
 
 def ledger_user_id_candidates(user_id: object) -> list[str]:
-    """PG 台账/资金快照查询用的 user_id 候选。
-
-    数字 sub（``00000001``）与 require_sim_user_id 对齐，优先 ``1``，再带 zfill(8)。
-    不要把数字用户拼进保留账户 ``0``，否则同日快照会误命中空的 admin 账。
-    非数字（OSS admin）才回落到 ``0``。
-    """
-    raw = str(user_id or "").strip()
-    if not raw:
-        return ["0"]
-    if raw.isdigit():
-        as_int = str(int(raw))
-        return list(dict.fromkeys([as_int, as_int.zfill(8)]))
-    return list(dict.fromkeys([raw, "0"]))
+    """PG 台账/资金快照查询用的 user_id 候选。管理员带历史 ``0`` 作最后兜底。"""
+    return _user_id_aliases(user_id)
 
 
 def settings_key(tenant_id: str | None, user_id: object) -> str:
     return f"{SETTINGS_KEY_PREFIX}{normalize_tenant(tenant_id)}:{str(user_id).strip()}"
+
+
+def settings_lookup_keys(tenant_id: str | None, user_id: object) -> list[str]:
+    seen: set[str] = set()
+    keys: list[str] = []
+    for candidate in _user_id_aliases(user_id):
+        key = settings_key(tenant_id, candidate)
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
+def account_payload_score(data: dict | None) -> tuple[int, float, float]:
+    """比较别名账户谁更像真实资金：持仓数 > 总资产 > 现金。"""
+    if not data:
+        return (-1, -1.0, -1.0)
+    positions = data.get("positions") or {}
+    count = 0
+    if isinstance(positions, dict):
+        for pos in positions.values():
+            if not isinstance(pos, dict):
+                continue
+            try:
+                if float(pos.get("volume") or 0) > 0:
+                    count += 1
+            except (TypeError, ValueError):
+                continue
+    elif isinstance(positions, list):
+        count = len(positions)
+    try:
+        total = float(data.get("total_asset") or 0.0)
+    except (TypeError, ValueError):
+        total = 0.0
+    try:
+        cash = float(data.get("cash") or 0.0)
+    except (TypeError, ValueError):
+        cash = 0.0
+    return (count, total, cash)
 
 
 def parse_account_key(key: str) -> tuple[str, str, str] | None:
@@ -110,10 +187,12 @@ ACTIVE_STRATEGY_KEY_PREFIX = "trade:active_strategy:"
 
 
 def normalize_runtime_user(raw_user_id: object) -> str:
-    """运行时 user 身份：数字补零 8 位，非数字保持原样（与 _normalize_identity 同口径）。"""
+    """运行时 user 身份：管理员族收口 10000001，其它数字补零 8 位，非数字保持原样。"""
     raw = str(raw_user_id or "").strip()
     if not raw:
         return raw
+    if is_admin_sim_user(raw):
+        return CANONICAL_ADMIN_SIM_USER
     return raw.zfill(8) if raw.isdigit() else raw
 
 
@@ -127,6 +206,30 @@ def active_strategy_key(tenant_id: object, user_id: object) -> str:
         f"{ACTIVE_STRATEGY_KEY_PREFIX}"
         f"{normalize_runtime_tenant(tenant_id)}:{normalize_runtime_user(user_id)}"
     )
+
+
+def active_strategy_lookup_keys(tenant_id: object, user_id: object) -> list[str]:
+    """读取运行态时的候选键，覆盖管理员历史后缀。"""
+    tenant = normalize_runtime_tenant(tenant_id)
+    seen: set[str] = set()
+    keys: list[str] = []
+
+    def _add(suffix: object) -> None:
+        text = str(suffix or "").strip()
+        if not text:
+            return
+        key = f"{ACTIVE_STRATEGY_KEY_PREFIX}{tenant}:{text}"
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+
+    _add(normalize_runtime_user(user_id))
+    for candidate in _user_id_aliases(user_id):
+        _add(candidate)
+        if candidate.isdigit():
+            _add(str(int(candidate)))
+            _add(str(int(candidate)).zfill(8))
+    return keys
 
 
 def parse_active_strategy_key(key: str) -> tuple[str, str] | None:

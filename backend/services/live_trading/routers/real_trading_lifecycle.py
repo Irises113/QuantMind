@@ -552,8 +552,8 @@ async def stop_trading(
             auth, user_id=user_id, tenant_id=tenant_id
         )
 
-        active_strat_raw = redis.client.get(
-            _active_strategy_key(resolved_tenant_id, resolved_user_id)
+        active_strat_raw = _read_active_strategy_raw(
+            redis, resolved_tenant_id, resolved_user_id
         )
         result = {"status": "success", "message": "Stopped"}
         stopped_strategy_id = None
@@ -569,8 +569,8 @@ async def stop_trading(
             )
             logger.info(f"[Sim] 用户 {resolved_user_id} 停止了沙箱模拟盘")
 
-        # Clear active strategy in Redis
-        redis.client.delete(_active_strategy_key(resolved_tenant_id, resolved_user_id))
+        # Clear active strategy in Redis（含管理员历史别名）
+        _delete_active_strategy_aliases(redis, resolved_tenant_id, resolved_user_id)
         # 清理 24h bootstrap 锁，避免同策略 24h 内重启被误挡
         for pat in (
             f"qm:hosted:simulation:bootstrap:{resolved_tenant_id}:{resolved_user_id}:*",
@@ -672,8 +672,8 @@ async def get_status(
     # Get active strategy info
     strategy_info = None
     active_strat_id = None
-    active_strat_raw = redis.client.get(
-        _active_strategy_key(resolved_tenant_id, resolved_user_id)
+    active_strat_raw = _read_active_strategy_raw(
+        redis, resolved_tenant_id, resolved_user_id
     )
     portfolio_snapshot = None
     latest_hosted_task = None

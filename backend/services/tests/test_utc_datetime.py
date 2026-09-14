@@ -50,3 +50,14 @@ def test_upgrade_v107_sql_has_no_percent_sign():
     assert "%" not in sql
     assert "timestamptz" in sql.lower()
     assert "00000001" in sql
+
+
+def test_upgrade_v108_sql_has_no_percent_sign():
+    from pathlib import Path
+
+    sql_path = Path(__file__).resolve().parents[3] / "data" / "upgrade_v1.0.8.sql"
+    sql = sql_path.read_text(encoding="utf-8")
+    assert "%" not in sql
+    assert "10000001" in sql
+    assert "sim_orders" in sql
+    assert "simulation_fund_snapshots" in sql

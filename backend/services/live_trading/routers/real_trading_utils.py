@@ -225,11 +225,45 @@ def get_strategy_path(user_id: str):
 
 
 def _active_strategy_key(tenant_id: str, user_id: str) -> str:
-    # 唯一口径见 shared/simulation_account_keys：数字补零 8 位，非数字保持原样。
+    # 唯一口径见 shared/simulation_account_keys：管理员族 10000001，其它数字补零 8 位。
     # 禁止手写 zfill(8)——曾导致 admin 被写成 000admin，重启恢复与状态查询分裂。
     from backend.shared.simulation_account_keys import active_strategy_key
 
     return active_strategy_key(tenant_id, user_id)
+
+
+def _read_active_strategy_raw(redis: RedisClient, tenant_id: str, user_id: str):
+    """读 active_strategy，命中历史别名时回写规范键。"""
+    from backend.shared.simulation_account_keys import active_strategy_lookup_keys
+
+    client = getattr(redis, "client", None)
+    if client is None:
+        return None
+    canonical = _active_strategy_key(tenant_id, user_id)
+    for key in active_strategy_lookup_keys(tenant_id, user_id):
+        raw = client.get(key)
+        if not raw:
+            continue
+        if key != canonical:
+            try:
+                client.set(canonical, raw)
+            except Exception:
+                pass
+        return raw
+    return None
+
+
+def _delete_active_strategy_aliases(redis: RedisClient, tenant_id: str, user_id: str) -> None:
+    from backend.shared.simulation_account_keys import active_strategy_lookup_keys
+
+    client = getattr(redis, "client", None)
+    if client is None:
+        return
+    for key in active_strategy_lookup_keys(tenant_id, user_id):
+        try:
+            client.delete(key)
+        except Exception:
+            continue
 
 
 def _normalize_identity(
@@ -239,7 +273,7 @@ def _normalize_identity(
 ) -> tuple[str, str]:
     """
     统一身份来源：JWT 为准；兼容传参时必须与 JWT 一致。
-    数字 user_id 按 8 位补零（兼容历史整数 ID），非数字（如 admin）保持原样，
+    数字 user_id 按 8 位补零（兼容历史整数 ID）；管理员族收口 10000001。
     避免与 qm_user_models 中存储的原始 user_id 不一致导致默认模型查询失败。
     """
     token_user_id = str(auth.user_id).strip()
@@ -256,7 +290,9 @@ def _normalize_identity(
             detail="Forbidden tenant_id override",
         )
 
-    normalized_user = token_user_id.zfill(8) if token_user_id.isdigit() else token_user_id
+    from backend.shared.simulation_account_keys import normalize_runtime_user
+
+    normalized_user = normalize_runtime_user(token_user_id)
     return normalized_user, token_tenant_id
 
 
