@@ -431,23 +431,35 @@ async def start_trading(
                     except Exception:
                         acquired = True  # Redis 异常不阻断，仍尝试建单（靠 task_id 去重兜底）
                     if acquired:
-                        bootstrap_result = await run_simulation_cycle_for_active(
-                            tenant_id=resolved_tenant_id,
-                            user_id=resolved_user_id,
-                            strategy_id=strategy_id or strategy_name,
-                            live_trade_config=live_config,
-                            run_id=bootstrap_task_id,
-                        )
-                        if bootstrap_result.get("status") == "failed":
-                            bootstrap_skipped_reason = str(
-                                bootstrap_result.get("error") or "simulation cycle failed"
-                            )[:300]
-                        logger.info(
-                            "[SimBootstrap] 首次启动已走 SimulationEngine tenant=%s user=%s strategy=%s task=%s status=%s filled=%s",
-                            resolved_tenant_id, resolved_user_id, strategy_id or strategy_name,
-                            bootstrap_task_id, (bootstrap_result or {}).get("status"),
-                            (bootstrap_result or {}).get("filled_count"),
-                        )
+                        try:
+                            bootstrap_result = await run_simulation_cycle_for_active(
+                                tenant_id=resolved_tenant_id,
+                                user_id=resolved_user_id,
+                                strategy_id=strategy_id or strategy_name,
+                                live_trade_config=live_config,
+                                run_id=bootstrap_task_id,
+                            )
+                            if bootstrap_result.get("status") == "failed":
+                                bootstrap_skipped_reason = str(
+                                    bootstrap_result.get("error") or "simulation cycle failed"
+                                )[:300]
+                                # 失败不占 24h 锁，否则重置后再启动仍被跳过
+                                try:
+                                    redis.client.delete(bootstrap_lock_key)
+                                except Exception:
+                                    pass
+                            logger.info(
+                                "[SimBootstrap] 首次启动已走 SimulationEngine tenant=%s user=%s strategy=%s task=%s status=%s filled=%s",
+                                resolved_tenant_id, resolved_user_id, strategy_id or strategy_name,
+                                bootstrap_task_id, (bootstrap_result or {}).get("status"),
+                                (bootstrap_result or {}).get("filled_count"),
+                            )
+                        except Exception:
+                            try:
+                                redis.client.delete(bootstrap_lock_key)
+                            except Exception:
+                                pass
+                            raise
                     else:
                         bootstrap_skipped_reason = "bootstrap_lock_exists"
                         logger.info(

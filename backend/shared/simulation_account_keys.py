@@ -36,6 +36,29 @@ def account_key(tenant_id: str | None, user_id: object, market: str | None = "CN
     return f"{ACCOUNT_KEY_PREFIX}{tenant}:{user}:{normalize_market(market)}"
 
 
+def account_lookup_keys(
+    tenant_id: str | None, user_id: object, market: str | None = "CN"
+) -> list[str]:
+    """读取账户时的候选键：调用方原样 + 数字用户的 int / zfill(8) 别名。
+
+    重置接口用 require_sim_user_id → int（``simulation:account:default:1``），
+    JWT sub 却是 ``00000001``。读写任一口径都应能命中，避免 bootstrap 报账户不存在。
+    """
+    seen: set[str] = set()
+    keys: list[str] = []
+    candidates: list[object] = [user_id]
+    raw = str(user_id or "").strip()
+    if raw.isdigit():
+        as_int = str(int(raw))
+        candidates.extend([as_int, as_int.zfill(8)])
+    for candidate in candidates:
+        key = account_key(tenant_id, candidate, market)
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
 def settings_key(tenant_id: str | None, user_id: object) -> str:
     return f"{SETTINGS_KEY_PREFIX}{normalize_tenant(tenant_id)}:{str(user_id).strip()}"
 

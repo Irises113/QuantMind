@@ -61,3 +61,16 @@ def test_signal_loader_normalizes_bare_code_to_suffix():
     assert _normalize_signal_symbol("000419") == "000419.SZ"
     assert _normalize_signal_symbol("SH600928") == "600928.SH"
     assert _normalize_signal_symbol("600928.SH") == "600928.SH"
+
+
+def test_ensure_redis_attaches_connected_trade_client():
+    engine = SimulationEngine()
+    assert getattr(engine.redis, "client", None) is None
+
+    fake = MagicMock()
+    fake.client = object()
+    with patch("backend.services.trade_shared.redis_client.get_redis", return_value=fake):
+        engine._ensure_redis()
+
+    assert engine.redis is fake
+    assert engine.account_manager.redis is fake

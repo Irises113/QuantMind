@@ -255,6 +255,22 @@ return cjson.encode({success=true, unlocked=unlocked})
 
         return account_key(tenant_id, user_id, market)
 
+    def _lookup_keys(self, user_id: int, tenant_id: str, market: str = "CN") -> list[str]:
+        from backend.shared.simulation_account_keys import account_lookup_keys
+
+        return account_lookup_keys(tenant_id, user_id, market)
+
+    def _ensure_client(self):
+        """空 RedisClient（未 connect）时接到 trade 共享连接，避免 bootstrap 读不到账户。"""
+        client = getattr(self.redis, "client", None) if self.redis is not None else None
+        if client is not None:
+            return client
+        shared = _shared_redis()
+        if shared is not None and self.redis is not None:
+            self.redis.client = shared
+            return shared
+        return shared
+
     @staticmethod
     def _exec_lock_key(user_id: int, tenant_id: str) -> str:
         return f"simulation:exec_lock:{SimulationAccountManager._normalize_tenant(tenant_id)}:{user_id}"
@@ -463,6 +479,7 @@ return 0
             "market": self._normalize_market(market),
         }
 
+        self._ensure_client()
         write_json_cache(self.redis, key, account_data)
         logger.info(
             "Initialized simulation account for tenant=%s user=%s market=%s with %.2f",
@@ -482,14 +499,18 @@ return 0
         Redis 缺键时从 ledger 投影自愈（lots→持仓+收盘重估），并回填 Redis；
         台账也无记录时返回 None（表示账户从未创建，不自动建空账）。
         """
-        if not self.redis.client:
+        if not self._ensure_client():
             return None
 
         tenant_id = self._normalize_tenant(tenant_id)
-        key = self._get_key(user_id, tenant_id, market)
-        data = read_json_cache(self.redis, key)
+        data = None
+        for key in self._lookup_keys(user_id, tenant_id, market):
+            data = read_json_cache(self.redis, key)
+            if data:
+                break
         if data:
             return data
+        key = self._get_key(user_id, tenant_id, market)
 
         rebuilt = await self._rebuild_from_ledger(user_id, tenant_id, market)
         if rebuilt:
@@ -766,11 +787,15 @@ return 0
         t_plus_1: 买入是否锁定至次日（CN 规则）。T+0 市场传 False，
         买入即刻计入可卖量。
         """
-        if not self.redis.client:
+        if not self._ensure_client():
             return {"success": False, "reason": "REDIS_UNAVAILABLE"}
 
         tenant_id = self._normalize_tenant(tenant_id)
         key = self._get_key(user_id, tenant_id, market)
+        for candidate in self._lookup_keys(user_id, tenant_id, market):
+            if self.redis.client.get(candidate):
+                key = candidate
+                break
 
         # 如果账户不存在，先初始化（交易时需要账户存在）。
         # 新注册/默认用户统一按 100 万初始资金建账；
@@ -779,6 +804,7 @@ return 0
             await self.init_account(
                 user_id, initial_cash=1_000_000.0, tenant_id=tenant_id, market=market
             )
+            key = self._get_key(user_id, tenant_id, market)
 
         if (
             is_margin_trade
@@ -830,11 +856,15 @@ return 0
         仅对 T+1 市场（CN）有意义；对 T+0 市场账户调用无副作用
         （可卖量恒等于总量）。
         """
-        if not self.redis.client:
+        if not self._ensure_client():
             return {"success": False, "reason": "REDIS_UNAVAILABLE"}
 
         tenant_id = self._normalize_tenant(tenant_id)
         key = self._get_key(user_id, tenant_id, market)
+        for candidate in self._lookup_keys(user_id, tenant_id, market):
+            if self.redis.client.get(candidate):
+                key = candidate
+                break
 
         try:
             result = self.redis.client.eval(self._unlock_t1_lua, 1, key)

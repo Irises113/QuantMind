@@ -98,6 +98,18 @@ class SimulationEngine:
         self.rebalance_calculator = RebalanceCalculator()
         self._market_data = market_data or get_local_market_data()
 
+    def _ensure_redis(self) -> None:
+        """模块级单例默认是未 connect 的 RedisClient，bootstrap 必须接到 trade Redis。"""
+        if getattr(self.redis, "client", None) is not None:
+            return
+        from backend.services.trade_shared.redis_client import get_redis
+
+        connected = get_redis()
+        if getattr(connected, "client", None) is None:
+            return
+        self.redis = connected
+        self.account_manager = SimulationAccountManager(self.redis)
+
     async def run_cycle(
         self,
         tenant_id: str,
@@ -224,6 +236,7 @@ class SimulationEngine:
                 )
 
                 # 3. 获取当前账户状态（按市场隔离）
+                self._ensure_redis()
                 account_data = await self.account_manager.get_account(
                     user_id=int(uid) if uid.isdigit() else 0,
                     tenant_id=tenant,

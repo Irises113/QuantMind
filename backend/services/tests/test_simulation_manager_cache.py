@@ -3,6 +3,7 @@ import json
 import pytest
 
 from backend.services.trade_shared.simulation_manager import SimulationAccountManager
+from backend.shared.simulation_account_keys import account_lookup_keys
 
 
 class _FakeRedisClient:
@@ -83,3 +84,44 @@ async def test_simulation_manager_account_update_uses_cache_helper():
     cached = json.loads(redis.client.get("simulation:account:default:1"))
     assert cached["cash"] == 999000
     assert cached["total_asset"] > 0
+
+
+@pytest.mark.asyncio
+async def test_get_account_reads_zfill_alias_key():
+    redis = _FakeRedis()
+    manager = SimulationAccountManager(redis)
+    redis.client.set(
+        "simulation:account:default:00000001",
+        json.dumps({"cash": 1_000_000.0, "positions": {}}),
+    )
+
+    account = await manager.get_account(1, tenant_id="default")
+    assert account is not None
+    assert account["cash"] == 1_000_000.0
+
+
+@pytest.mark.asyncio
+async def test_get_account_reconnects_detached_redis(monkeypatch):
+    shared = _FakeRedis()
+    await SimulationAccountManager(shared).init_account(
+        user_id=1, tenant_id="default", initial_cash=1_000_000
+    )
+
+    class _Detached:
+        client = None
+
+    manager = SimulationAccountManager(_Detached())
+    monkeypatch.setattr(
+        "backend.services.trade_shared.simulation_manager._shared_redis",
+        lambda: shared.client,
+    )
+    account = await manager.get_account(1, tenant_id="default")
+    assert account is not None
+    assert account["cash"] == 1_000_000.0
+
+
+def test_account_lookup_keys_covers_int_and_zfill():
+    keys = account_lookup_keys("default", "00000001")
+    assert keys[0] == "simulation:account:default:00000001"
+    assert "simulation:account:default:1" in keys
+    assert keys == list(dict.fromkeys(keys))
