@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # QuantMind 一键更新脚本
 # 核心流程：拉代码 → 重建/重启后端容器 → 跑 data/upgrade_*.sql → 健康检查。
-# db/redis/qwenpaw 等基础设施容器不动（restart: unless-stopped 兜底）。
+# db/redis/qwenpaw 等基础设施容器不强制重启（仅 compose 配置漂移时按需重建）。
 # 用法：sudo bash deploy/update.sh [--ref master] [--remote gitee|github|origin] [--force] [--no-build] [--skip-backup]
 
 set -Eeuo pipefail
@@ -251,10 +251,10 @@ build_core() {
     printf '%s' "$trigger" > "$marker"
 }
 
-# 关键步骤：只重启 application 层容器，**不**碰 db/redis/qwenpaw 等基础设施
-# （db 已 restart: unless-stopped，无需脚本干预；碰它才容易翻车）
+# 关键步骤：强制重建 application 层容器（bind mount 代码需进程重启才生效），
+# 其余服务（含 db/redis/qwenpaw）不强制重启，仅在 compose 配置发生漂移时按需重建。
 restart_services() {
-    log '3/4 重启后端服务（quantmind + celery；不动 db/redis/qwenpaw）'
+    log '3/4 重启后端服务（强制重建 quantmind + celery）'
     cd "$PROJECT_DIR"
     local services=(quantmind)
     local service
@@ -264,6 +264,20 @@ restart_services() {
         fi
     done
     docker compose up -d --no-deps --force-recreate "${services[@]}"
+
+    # 配置漂移 reconcile：对其余服务执行一次 up -d，Compose 按配置 hash 仅重建
+    # 端口/环境/镜像/挂载发生变化的容器，未变更者原地不动（db/redis 不会被无谓重启）。
+    # 修复场景：改了 qwenpaw 的绑定/环境等 compose 配置后，update 流程此前从不重建它，
+    # 导致改动长期不生效（例如 qwenpaw 端口回退 127.0.0.1）。
+    local others=()
+    while IFS= read -r service; do
+        [[ -z "$service" ]] && continue
+        [[ " ${services[*]} " == *" $service "* ]] && continue
+        others+=("$service")
+    done < <(docker compose config --services)
+    if (( ${#others[@]} > 0 )); then
+        docker compose up -d --no-deps "${others[@]}"
+    fi
 }
 
 # 跑 data/upgrade_*.sql —— 这是用户最关心的"执行 SQL"主流程。
