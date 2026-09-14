@@ -50,7 +50,7 @@
   ],
   "execution_defaults": {},
   "live_defaults": {
-    "rebalance_days": 3
+    "rebalance_days": 5
   },
   "live_config_tips": [],
   "dir": "通用策略",
