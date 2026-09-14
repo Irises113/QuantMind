@@ -89,21 +89,21 @@ export const StrategyTemplateModal: React.FC<StrategyTemplateModalProps> = ({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
-
-  const filtered =
-    category === 'all' ? templates : templates.filter((t) => t.category === category);
-
-  // 按 AI-IDE 虚拟目录（dir）分组展示，无 dir 的归入「通用策略」
-  const grouped = useMemo(() => {
+  // 按 AI-IDE 虚拟目录（dir）分组展示，无 dir 的归入「通用策略」。
+  // 必须在 isOpen 早退之前调用，否则打开弹窗时 hook 数量会比上一轮多。
+  const { filtered, grouped } = useMemo(() => {
+    const filteredList =
+      category === 'all' ? templates : templates.filter((t) => t.category === category);
     const map = new Map<string, StrategyTemplate[]>();
-    for (const t of filtered) {
+    for (const t of filteredList) {
       const key = (t.dir && t.dir.trim()) || '通用策略';
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(t);
     }
-    return Array.from(map.entries());
-  }, [filtered]);
+    return { filtered: filteredList, grouped: Array.from(map.entries()) };
+  }, [templates, category]);
+
+  if (!isOpen) return null;
 
   const handleSelect = (template: StrategyTemplate) => {
     onSelect(template);

@@ -573,41 +573,23 @@ export const ModelTrainingPage: React.FC = () => {
     pollTimerRef.current = window.setInterval(tick, 3000);
   };
 
-  // 页面挂载时恢复「切页前的活跃训练」：有进行中/最近任务则继续轮询，进度不丢
+  // 页面挂载时仅恢复「进行中」的训练任务：切页前的 running/provisioning 继续轮询，
+  // 进度不丢。已完成/失败不恢复，页面停在第一步（避免进页即跳到第五步结果页）。
   useEffect(() => {
     let active = true;
     (async () => {
       const run = await modelTrainingService.getActiveTrainingRun();
       if (!active || !run) return;
+      const inProgress =
+        !run.isCompleted &&
+        ['running', 'provisioning', 'waiting_callback', 'pending'].includes(run.status || '');
+      if (!inProgress) return;
       ingestServerLogs(run.logs);
-      const failedByLog = /\[ERROR\].*(编排失败|训练异常退出|原生进程轮询异常)/.test(run.logs || '');
-      // 仅恢复尚未完成的任务；已完成/失败（含 Redis 终态、日志已报错）不再伪装成训练中
-      if (run.isCompleted || run.status === 'failed' || failedByLog) {
-        setBackendRunStatus(run.status || (failedByLog ? 'failed' : ''));
-        if (run.status === 'failed' || failedByLog) {
-          setResultError((run.result as any)?.error || '训练失败');
-          setTrainingStatus('draft');
-          setExecutionStage('待配置');
-          setBackendRunStatus('');
-        } else {
-          const parsed = parseTrainingResult(requestPreview, run.runId, run.result);
-          if (parsed) {
-            setResult(parsed);
-            setResultError('');
-            setTrainingStatus('completed');
-            setProgress(100);
-            setCurrentStep(4);
-            setExecutionStage('训练完成');
-          }
-        }
-        return;
-      }
       setBackendRunStatus(run.status || '');
-      if (run.status === 'running' || run.status === 'provisioning' || run.status === 'waiting_callback' || run.status === 'pending') {
-        setProgress(Math.max(run.progress || 5, 5));
-      }
+      setProgress(Math.max(run.progress || 5, 5));
       setTrainingStatus('running');
       setExecutionStage('训练进行中（已从上次会话恢复）');
+      setCurrentStep(3);
       startPolling(run.runId);
     })();
     return () => {
