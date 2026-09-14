@@ -117,6 +117,12 @@ async def migrate_user_ids(
     if not plan:
         return report
     async with get_session() as session:
+        try:
+            # 防锁等待升级为启动期死锁：拿不到 DDL 锁时 30s 快速失败并记日志，
+            # 而不是无限等待（曾因调用方事务未提交、两连接互等，服务起不来）。
+            await session.execute(text("SET LOCAL lock_timeout = '30s'"))
+        except Exception:  # noqa: BLE001 - 设置失败不阻塞主流程
+            pass
         if not dry_run:
             await _drop_user_id_fks(session)
         for old, new in plan.items():

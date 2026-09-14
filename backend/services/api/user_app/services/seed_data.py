@@ -52,6 +52,11 @@ async def init_admin_data(db: AsyncSession):
         logger.warning(
             "检测到 admin user_id=%r，纠正为 00000001", admin_user.user_id
         )
+        # 必须先结束当前事务再纠正：上面的 SELECT 让本 session 持有 users 表上的锁/
+        # 事务快照，而 fix_admin_user_id 会在**新连接**上执行 ALTER TABLE（ACCESS
+        # EXCLUSIVE）——自己持锁、新连接等锁，同进程两连接互等，启动期直接死锁
+        # （曾表现为卡在 Master database health check 后、子服务不拉起）。
+        await db.commit()
         await fix_admin_user_id()
         await db.expire_all()
         result = await db.execute(stmt)
