@@ -7,11 +7,13 @@ from .real_trading_utils import (
     _active_strategy_key,
     _default_execution_config,
     _default_live_trade_config,
+    _delete_active_strategy_aliases,
     _fetch_active_portfolio_snapshot,
     _normalize_execution_config,
     _normalize_identity,
     _normalize_live_trade_config,
     _parse_user_id,
+    _read_active_strategy_raw,
     _schedule_user_notification,
 )
 from backend.services.live_trading.services.manual_execution_service import (
