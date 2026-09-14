@@ -23,11 +23,13 @@ try:
     from backend.shared.database_manager_v2 import get_session
     from backend.shared.redis_sentinel_client import get_redis_sentinel_client
     from backend.shared.strategy_storage import get_strategy_storage_service
+    from backend.shared.strategy_template_sync import sync_builtin_templates
     from backend.shared.utils import normalize_user_id
 except ImportError:
     from shared.database_manager_v2 import get_session  # type: ignore
     from shared.strategy_storage import get_strategy_storage_service  # type: ignore
     from shared.redis_sentinel_client import get_redis_sentinel_client  # type: ignore
+    from shared.strategy_template_sync import sync_builtin_templates  # type: ignore
     from shared.utils import normalize_user_id  # type: ignore
 
 from backend.services.engine.qlib_app.services.strategy_templates import (
@@ -361,40 +363,8 @@ async def _fetch_latest_backtest_summaries(
 
 
 async def _perform_sync(user_id: str):
-    """
-    执行模板同步的内部逻辑：将内置模板同步到用户的个人策略数据库。
-    统一管理：仅通过 StrategyStorageService 写入，禁止直连 SQL；去重键为 strategy_type==template.id。
-    同步 DB 操作通过 asyncio.to_thread 避免阻塞事件循环。
-    """
-    svc = get_strategy_storage_service()
-
-    templates = get_all_templates()
-    synced_count = 0
-    for t in templates:
-        # 去重：按 parameters.strategy_type == template.id 判重，避免同名误判
-        existing = await asyncio.to_thread(svc.list, user_id=user_id)
-        if any(
-            (s.get("parameters") or {}).get("strategy_type") == t.id for s in existing
-        ):
-            continue
-        # 兼容旧数据：同名已存在也跳过，避免重复克隆
-        if any(s.get("name") == t.name for s in existing):
-            continue
-
-        await svc.save(
-            user_id=user_id,
-            name=t.name,
-            code=t.code,
-            metadata={
-                "description": t.description,
-                "tags": [t.category, t.difficulty, "SystemSync"],
-                "status": "ACTIVE",
-                "is_verified": True,
-                "parameters": {"strategy_type": t.id, "topk": 50, "signal": "<PRED>"},
-            },
-        )
-        synced_count += 1
-    return synced_count
+    """将内置模板同步到用户个人策略库；去重键为 strategy_type / template:<id> / 同名。"""
+    return await sync_builtin_templates(user_id)
 
 
 # ============================================================================
@@ -572,6 +542,15 @@ async def list_user_strategies(
         svc = get_strategy_storage_service()
         tag_list = tags.split(",") if tags else None
         tenant_id = _get_tenant_id(request)
+
+        # 注释承诺过「新用户自动初始化模板」，先前漏实现。
+        # 每次列表先补齐缺失内置策略；已有同 strategy_type / template:id / 同名则跳过。
+        try:
+            await _perform_sync(user_id)
+        except Exception as e:
+            StructuredTaskLogger(logger, "user-strategies").warning(
+                "auto_sync_failed", "列表自动同步模板失败，继续返回已有策略", error=e
+            )
 
         items = await asyncio.to_thread(
             svc.list, user_id=user_id, category=category, search=search, tags=tag_list
