@@ -424,14 +424,20 @@ def _ensure_database_schema():
 def _upgrade_script_paths() -> list[str]:
     """升级 SQL 候选路径（去重保序）。
 
-    /app/data 是历史路径；实际部署中 repo data/ 挂载在 /data，
-    只扫 /app/data 会导致升级脚本从不执行（v1.0.6 修）。
+    /app/data 是历史路径（容器里常是 uploads）；compose 把仓库 data/ 挂到 /data。
+    再扫仓库相对路径，避免本地直接跑 main_oss 时漏脚本。
     """
     import glob as _glob
 
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_data = os.path.abspath(os.path.join(here, "..", "data"))
     seen: set[str] = set()
     out: list[str] = []
-    for pattern in ("/app/data/upgrade_*.sql", "/data/upgrade_*.sql"):
+    for pattern in (
+        "/app/data/upgrade_*.sql",
+        "/data/upgrade_*.sql",
+        os.path.join(repo_data, "upgrade_*.sql"),
+    ):
         for sql_path in sorted(_glob.glob(pattern)):
             if sql_path not in seen:
                 seen.add(sql_path)

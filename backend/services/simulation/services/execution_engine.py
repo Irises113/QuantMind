@@ -22,6 +22,7 @@ from backend.services.simulation.services.simulation_manager import (
 )
 from backend.services.trade_shared.trade_config import settings
 from backend.shared.auth import get_internal_call_secret
+from backend.shared.utc_datetime import utc_now
 from backend.shared.trade_account_cache import (
     write_json_cache,
     write_trade_account_cache,
@@ -758,10 +759,9 @@ class SimulationExecutionEngine:
             stamp_duty=result.stamp_duty,
             transfer_fee=transfer_fee,
             total_fee=total_fee,
-            # executed_at 列是 TIMESTAMP WITHOUT TIME ZONE，必须写 naive UTC。
-            # aware datetime 会在 asyncpg 编码时报
-            # "can't subtract offset-naive and offset-aware datetimes"。
-            executed_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            # sim_trades.executed_at 是 TIMESTAMPTZ，必须写 aware UTC。
+            # naive UTC 会在旧库 timestamptz 上被 asyncpg 拒绝，整笔成交回滚。
+            executed_at=utc_now(),
             price_source=result.price_source,
         )
         self.db.add(trade)
