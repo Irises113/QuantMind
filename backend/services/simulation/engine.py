@@ -50,7 +50,7 @@ from backend.services.simulation.services.simulation_manager import (
     SimulationAccountManager,
 )
 from backend.services.trade_shared.trade_config import settings
-from backend.shared.database_manager_v2 import get_db_manager
+from backend.shared.database_manager_v2 import get_session
 from backend.shared.stock_utils import StockCodeUtil
 from backend.shared.strategy_storage import get_strategy_storage_service
 
@@ -106,6 +106,7 @@ class SimulationEngine:
         run_id: str | None = None,
         params_override: dict[str, Any] | None = None,
         pool_id: str | None = None,
+        signal_run_id: str | None = None,
     ) -> ExecutionReport:
         """
         执行一次模拟盘调仓周期。
@@ -114,7 +115,8 @@ class SimulationEngine:
             tenant_id: 租户 ID
             user_id: 用户 ID
             strategy_id: 策略 ID
-            run_id: 指定信号批次 ID，若 None 则取最新
+            run_id: 本轮执行 ID（订单备注/任务追踪），不是推理批次
+            signal_run_id: 指定推理信号批次；None 则取最新截面
             params_override: 前端传递的策略参数覆盖
 
         Returns:
@@ -134,14 +136,13 @@ class SimulationEngine:
         )
 
         try:
-            db_manager = get_db_manager()
-            async with db_manager.session() as db:
+            async with get_session() as db:
                 # 1. 加载信号
                 signals = await self.signal_loader.load_latest_signals(
                     db=db,
                     tenant_id=tenant,
                     user_id=uid,
-                    run_id=run_id,
+                    run_id=signal_run_id,
                 )
                 report.signal_count = len(signals)
 

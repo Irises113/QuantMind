@@ -24,7 +24,7 @@ from backend.services.simulation.services.execution_engine import (
 from backend.services.simulation.services.order_service import SimOrderService
 from backend.services.simulation.services.simulation_manager import SimulationAccountManager
 from backend.services.trade_shared.trade_config import settings
-from backend.shared.database_manager_v2 import get_db_manager
+from backend.shared.database_manager_v2 import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -286,8 +286,7 @@ class SandboxSignalConsumer:
         run_id: str,
     ):
         """创建订单并执行"""
-        db_manager = get_db_manager()
-        async with db_manager.session() as db:
+        async with get_session() as db:
             order_service = SimOrderService(db)
             exec_engine = SimulationExecutionEngine(db, self._account_manager)
 

@@ -758,9 +758,10 @@ class SimulationExecutionEngine:
             stamp_duty=result.stamp_duty,
             transfer_fee=transfer_fee,
             total_fee=total_fee,
-            # 时区BUG修复：timestamptz 列必须用 aware UTC，naive 值会被会话
-            # 时区重解释（曾导致成交时间 -8h）。
-            executed_at=datetime.now(timezone.utc),
+            # executed_at 列是 TIMESTAMP WITHOUT TIME ZONE，必须写 naive UTC。
+            # aware datetime 会在 asyncpg 编码时报
+            # "can't subtract offset-naive and offset-aware datetimes"。
+            executed_at=datetime.now(timezone.utc).replace(tzinfo=None),
             price_source=result.price_source,
         )
         self.db.add(trade)
