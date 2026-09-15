@@ -9,7 +9,7 @@
 #   QUANTMIND_DOCKER_MIRROR  Docker 镜像加速地址
 #   QUANTMIND_REPO_URL    代码仓库地址（默认自建 Gitea）
 #   QUANTMIND_REF         要部署的 Git 分支或 tag（默认 master）
-#   QUANTMIND_REPLACE_QLIB=true       覆盖已有 db/qlib_data（谨慎）
+#   QUANTMIND_REPLACE_QLIB=true       覆盖已有 Qlib 数据 data/qlib/cn_data（谨慎）
 #   QUANTMIND_REPLACE_DATABASE=true   覆盖已有 PostgreSQL 业务数据（谨慎）
 #   QUANTMIND_REPLACE_QWENPAW_DATA=true 覆盖已有 QwenPaw 持久化数据（谨慎）
 #   QUANTMIND_REBUILD_IMAGE=true 无条件基于最新代码重建 quantmind 镜像。
@@ -291,17 +291,6 @@ checkout_code() {
 }
 
 install_payload_data() {
-    local qlib_target="$PROJECT_DIR/db/qlib_data"
-    # 只有真实 Qlib 数据才默认保留；仓库中的空目录或损坏数据会被离线包替换。
-    if [[ -e "$qlib_target" ]] && has_qlib_features "$qlib_target" \
-        && [[ ${QUANTMIND_REPLACE_QLIB:-false} != true ]]; then
-        log "检测到有效 Qlib 数据，复用现有目录: $qlib_target"
-    else
-        rm -rf "$qlib_target"
-        mkdir -p "$PROJECT_DIR/db"
-        mv "$STAGING_DIR/db/qlib_data" "$qlib_target"
-    fi
-
     for directory in data models; do
         [[ -d "$STAGING_DIR/$directory" ]] || die "业务数据包缺少: $directory"
         if [[ -e "$PROJECT_DIR/$directory" ]] \
@@ -312,6 +301,27 @@ install_payload_data() {
             mv "$STAGING_DIR/$directory" "$PROJECT_DIR/$directory"
         fi
     done
+
+    # Qlib A 股缓存统一放在规范目录 data/qlib/cn_data（容器内 /data/qlib/cn_data，
+    # 与 backend/shared/qlib_paths.py 及前端 marketConfig 一致）。
+    # 旧版部署包/旧脚本可能落在 db/qlib_data，检测到有效数据时自动迁移，
+    # 避免「夜间同步写 A 目录、AI-IDE 读 B 目录」导致 Qlib 数据目录不存在。
+    local qlib_target="$PROJECT_DIR/data/qlib/cn_data"
+    local qlib_legacy="$PROJECT_DIR/db/qlib_data"
+    if has_qlib_features "$qlib_target" \
+        && [[ ${QUANTMIND_REPLACE_QLIB:-false} != true ]]; then
+        log "检测到有效 Qlib 数据，复用现有目录: $qlib_target"
+    elif has_qlib_features "$qlib_legacy" \
+        && [[ ${QUANTMIND_REPLACE_QLIB:-false} != true ]]; then
+        log "检测到旧位置 Qlib 数据，迁移到规范目录: $qlib_legacy -> $qlib_target"
+        mkdir -p "$PROJECT_DIR/data/qlib"
+        rm -rf "$qlib_target"
+        mv "$qlib_legacy" "$qlib_target"
+    else
+        rm -rf "$qlib_target"
+        mkdir -p "$PROJECT_DIR/data/qlib"
+        mv "$STAGING_DIR/db/qlib_data" "$qlib_target"
+    fi
     rm -rf "$STAGING_DIR"
 }
 
@@ -512,7 +522,7 @@ main() {
     restore_qwenpaw_volumes
     ensure_torch_device
     build_and_start
-    log "完成：代码=$PROJECT_DIR，Qlib 数据=$PROJECT_DIR/db/qlib_data"
+    log "完成：代码=$PROJECT_DIR，Qlib 数据=$PROJECT_DIR/data/qlib/cn_data"
     echo ""
     echo "========================================================================="
     echo " 🎉 QuantMind 完整部署成功！"
