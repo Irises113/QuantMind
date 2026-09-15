@@ -98,12 +98,16 @@ async def run_simulation_t1_unlock_task(
             ):
                 last_date = today
                 if not _is_cn_trade_date(now.date()):
+                    logger.info("模拟盘 T+1 跳过非交易日: %s", today)
                     continue
                 unlocked = await _unlock_all_accounts(
                     manager, as_of_date=now.date()
                 )
-                if unlocked:
-                    logger.info("模拟盘 T+1 解锁: %d 个账户有新解锁持仓", unlocked)
+                logger.info(
+                    "模拟盘 T+1 同步完成: date=%s unlocked_accounts=%d",
+                    today,
+                    unlocked,
+                )
         except Exception as exc:
             logger.warning("模拟盘 T+1 解锁任务异常: %s", exc)
         await asyncio.sleep(interval_seconds)

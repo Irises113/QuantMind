@@ -97,7 +97,11 @@ async def run_reconcile_once(
 
     manager = SimulationAccountManager(redis)
     try:
-        keys = list(redis.client.scan_iter(match="simulation:account:*", count=500))
+        keys = await asyncio.to_thread(
+            lambda: list(
+                redis.client.scan_iter(match="simulation:account:*", count=500)
+            )
+        )
     except Exception as exc:
         logger.warning("reconcile scan failed: %s", exc)
         return stats
@@ -117,7 +121,7 @@ async def run_reconcile_once(
         try:
             import json as _json
 
-            live_raw = redis.client.get(key)
+            live_raw = await asyncio.to_thread(redis.client.get, key)
             live = _json.loads(live_raw) if live_raw else {}
             if not isinstance(live, dict):
                 live = {}
@@ -170,7 +174,7 @@ async def run_reconcile_once(
                 try:
                     from backend.shared.trade_account_cache import write_json_cache
 
-                    write_json_cache(redis, key, rebuilt)
+                    await asyncio.to_thread(write_json_cache, redis, key, rebuilt)
                     fixed = True
                     stats["autofixed"] += 1
                 except Exception as exc:
@@ -203,7 +207,8 @@ async def run_reconcile_once(
         except Exception as exc:
             logger.debug("reconcile skipped %s: %s", key, exc)
             continue
-    logger.info(
+    log = logger.info if stats["diff_fields"] else logger.debug
+    log(
         "simulation reconcile done: checked=%d diff_fields=%d autofixed=%d",
         stats["checked"],
         stats["diff_fields"],
