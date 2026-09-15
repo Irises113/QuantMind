@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -850,7 +850,7 @@ def _normalize_execution_config(user_exec_cfg: dict, base_exec_cfg: dict) -> dic
         except (TypeError, ValueError):
             raise HTTPException(
                 status_code=400, detail="execution_config.max_buy_drop 非法"
-            )
+            ) from None
         if not (-0.10 <= max_buy_drop <= -0.01):
             raise HTTPException(
                 status_code=400,
@@ -865,7 +865,7 @@ def _normalize_execution_config(user_exec_cfg: dict, base_exec_cfg: dict) -> dic
         except (TypeError, ValueError):
             raise HTTPException(
                 status_code=400, detail="execution_config.stop_loss 非法"
-            )
+            ) from None
         if not (-0.20 <= stop_loss <= -0.03):
             raise HTTPException(
                 status_code=400,
@@ -903,7 +903,9 @@ def _normalize_live_trade_config(user_live_cfg: dict, base_live_cfg: dict) -> di
     try:
         LiveTradeConfigSchema.model_validate(merged)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"live_trade_config 非法: {exc}")
+        raise HTTPException(
+            status_code=400, detail=f"live_trade_config 非法: {exc}"
+        ) from exc
 
     normalized = dict(merged)
     normalized["schedule_type"] = str(
@@ -1042,11 +1044,17 @@ def _get_remote_quote_redis_config() -> tuple[str, int, str | None, int]:
     """远端行情快照 Redis 配置（与 stream 写入端 RemoteRedisDataSource 对齐）。
 
     优先级：REMOTE_QUOTE_REDIS_* 环境变量（含项目根 .env 兜底），
-    缺省直连免费行情服 www.quantmindai.cn:6379/db3。
+    未配置时仅回退部署内 Redis，不内置公网地址或凭据。
     """
-    host = _get_env_with_root_fallback("REMOTE_QUOTE_REDIS_HOST", "www.quantmindai.cn")
+    host = _get_env_with_root_fallback(
+        "REMOTE_QUOTE_REDIS_HOST",
+        _get_env_with_root_fallback("REDIS_HOST", "redis"),
+    )
     port = int(_get_env_with_root_fallback("REMOTE_QUOTE_REDIS_PORT", "6379") or "6379")
-    password = _get_env_with_root_fallback("REMOTE_QUOTE_REDIS_PASSWORD", "quantmind2026") or None
+    password = _get_env_with_root_fallback(
+        "REMOTE_QUOTE_REDIS_PASSWORD",
+        _get_env_with_root_fallback("REDIS_PASSWORD", ""),
+    ) or None
     db = int(_get_env_with_root_fallback("REMOTE_QUOTE_REDIS_DB", "3") or "3")
     return host, port, password, db
 

@@ -59,7 +59,9 @@ async def _ensure_table() -> None:
     _table_ensured = True
 
 
-def _positions_by_symbol(positions: Any) -> dict[str, float]:
+def _positions_by_symbol(
+    positions: Any, field: str = "volume"
+) -> dict[str, float]:
     out: dict[str, float] = {}
     if not isinstance(positions, dict):
         return out
@@ -69,7 +71,7 @@ def _positions_by_symbol(positions: Any) -> dict[str, float]:
         code = str(key).split("::", 1)[0].strip().upper()
         if not code:
             continue
-        out[code] = out.get(code, 0.0) + float(pos.get("volume") or 0)
+        out[code] = out.get(code, 0.0) + float(pos.get(field) or 0)
     return out
 
 
@@ -142,6 +144,24 @@ async def run_reconcile_once(
                         "pg_value": pg_pos.get(code, 0.0),
                         "diff": d,
                     })
+            live_available = _positions_by_symbol(
+                live.get("positions"), "available_volume"
+            )
+            pg_available = _positions_by_symbol(
+                rebuilt.get("positions"), "available_volume"
+            )
+            for code in sorted(set(live_available) | set(pg_available)):
+                d = live_available.get(code, 0.0) - pg_available.get(code, 0.0)
+                if abs(d) > _DIFF_TOL:
+                    diffs.append(
+                        {
+                            "field": "available_volume",
+                            "symbol": code,
+                            "redis_value": live_available.get(code, 0.0),
+                            "pg_value": pg_available.get(code, 0.0),
+                            "diff": d,
+                        }
+                    )
             if not diffs:
                 continue
             stats["diff_fields"] += len(diffs)

@@ -322,8 +322,9 @@ class SimulationScheduler:
                         tenant_id = parts[2]
                         user_id_str = parts[3]
                         if user_id_str.isdigit():
-                            result = await manager.unlock_t1(
-                                user_id=int(user_id_str), tenant_id=tenant_id,
+                            result = await manager.sync_t1_from_ledger(
+                                user_id=int(user_id_str),
+                                tenant_id=tenant_id,
                             )
                             if result.get("success") and result.get("unlocked", 0) > 0:
                                 unlocked_count += 1

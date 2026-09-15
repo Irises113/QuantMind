@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import List, Optional
 from uuid import UUID
 
 import logging
@@ -62,6 +61,15 @@ async def create_order(
     try:
         async with SimulationAccountManager.locked_execution(user_id, auth.tenant_id):
             order = await order_service.create_order(auth.tenant_id, user_id, data)
+            session_decision = await engine.assess_execution_window(order)
+            if not session_decision.can_execute:
+                await order_service.queue_order(
+                    order,
+                    session_decision.message,
+                    trading_session_date=session_decision.target_trade_date,
+                )
+                await db.refresh(order)
+                return order
             order.status = OrderStatus.SUBMITTED
             await db.commit()
             await db.refresh(order)
@@ -161,4 +169,4 @@ async def cancel_order(
     try:
         return await service.cancel_order(order, request.reason)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e

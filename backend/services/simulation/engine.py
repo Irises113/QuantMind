@@ -262,8 +262,17 @@ class SimulationEngine:
                     if int(float((pos or {}).get("volume") or 0)) > 0
                 ]
                 symbols = list(dict.fromkeys([s.symbol for s in signals] + position_symbols))
-                bars = await self._load_bars(symbols, market=market)
-                quotes = self._quotes_from_bars(bars)
+                quotes, live_ticks = await self._load_live_quotes(symbols)
+                if not live_ticks:
+                    report.error = "realtime_quote_unavailable"
+                    logger.error(
+                        "SimulationEngine: no fresh realtime quote; cycle rejected "
+                        "tenant=%s user=%s symbols=%d",
+                        tenant,
+                        uid,
+                        len(symbols),
+                    )
+                    return report
 
                 # 5. 调仓计算
                 orders = self.rebalance_calculator.calculate(
@@ -297,7 +306,7 @@ class SimulationEngine:
                         strategy_id=strategy_id,
                         market=market,
                         run_id=exec_run_id,
-                        bar=self._bar_for_symbol(bars, order.symbol),
+                        live_tick=self._tick_for_symbol(live_ticks, order.symbol),
                     )
                     report.orders.append(self._order_to_dict(order, result))
                     if result.success:
@@ -431,6 +440,36 @@ class SimulationEngine:
             trade_date = latest
         return await asyncio.to_thread(market_data.load_date, trade_date, symbols)
 
+    async def _load_live_quotes(
+        self, symbols: list[str]
+    ) -> tuple[dict[str, Quote], dict[str, dict[str, Any]]]:
+        from backend.services.simulation.services.redis_series_quote import (
+            fetch_series_ticks,
+        )
+
+        ticks = await fetch_series_ticks(symbols)
+        quotes: dict[str, Quote] = {}
+        indexed_ticks: dict[str, dict[str, Any]] = {}
+        for symbol, tick in ticks.items():
+            price = float(tick.get("price") or 0.0)
+            if price <= 0:
+                continue
+            quote = Quote(symbol=symbol, current_price=price)
+            for key in {
+                symbol,
+                StockCodeUtil.to_prefix(symbol),
+                StockCodeUtil.to_suffix(symbol),
+            }:
+                if key:
+                    quotes[key] = quote
+                    indexed_ticks[key] = tick
+        logger.info(
+            "SimulationEngine: fresh realtime quotes %d/%d",
+            len(ticks),
+            len(symbols),
+        )
+        return quotes, indexed_ticks
+
     @staticmethod
     def _quotes_from_bars(bars: dict[str, Any]) -> dict[str, Quote]:
         quotes: dict[str, Quote] = {}
@@ -459,6 +498,16 @@ class SimulationEngine:
             return bars[suffix]
         prefix = StockCodeUtil.to_prefix(symbol)
         return bars.get(prefix)
+
+    @staticmethod
+    def _tick_for_symbol(
+        ticks: dict[str, dict[str, Any]], symbol: str
+    ) -> dict[str, Any] | None:
+        return (
+            ticks.get(symbol)
+            or ticks.get(StockCodeUtil.to_suffix(symbol))
+            or ticks.get(StockCodeUtil.to_prefix(symbol))
+        )
 
     def _build_account(self, data: dict[str, Any]) -> SimulationAccount:
         """构建账户对象"""
@@ -511,7 +560,7 @@ class SimulationEngine:
         strategy_id: str,
         market: Any = None,
         run_id: str = "",
-        bar: Any = None,
+        live_tick: dict[str, Any] | None = None,
     ) -> ExecutionResult:
         """执行单个订单（虚拟撮合；成功后按开关镜像一笔真单到 QMT）"""
         from backend.services.simulation.models.order import (
@@ -535,17 +584,69 @@ class SimulationEngine:
         )
         db.add(sim_order)
         await db.flush()
+        from backend.services.simulation.models.order_v2 import SimulationOrderV2
 
-        if bar is not None:
-            result = await exec_engine.execute_from_bar(
-                sim_order, bar, market=getattr(market, "value", None)
+        db.add(
+            SimulationOrderV2(
+                order_id=sim_order.order_id,
+                tenant_id=tenant_id,
+                user_id=str(sim_order.user_id),
+                strategy_id=strategy_id or None,
+                account_id=f"sim:{tenant_id}:{sim_order.user_id}",
+                portfolio_id=int(sim_order.portfolio_id or 0),
+                legacy_order_id=sim_order.id,
+                symbol=sim_order.symbol,
+                side=sim_order.side.value,
+                position_side=str(
+                    getattr(
+                        getattr(sim_order, "position_side", "long"),
+                        "value",
+                        getattr(sim_order, "position_side", "long"),
+                    )
+                    or "long"
+                ),
+                trade_action=getattr(sim_order, "trade_action", None),
+                order_type=sim_order.order_type.value,
+                time_in_force="DAY",
+                quantity=float(sim_order.quantity or 0.0),
+                price=sim_order.price,
+                trigger_source="hosted",
+                status=sim_order.status.value,
             )
-        else:
-            result = await exec_engine.execute_order(
-                sim_order, market=getattr(market, "value", None)
+        )
+        await db.flush()
+
+        session_decision = await exec_engine.assess_execution_window(sim_order)
+        if not session_decision.can_execute:
+            result = ExecutionResult(
+                success=False,
+                message=str(session_decision.message or "outside trading session"),
             )
+            await exec_engine.mark_rejected(sim_order, result.message)
+            return result
+
+        snapshot = (
+            exec_engine.market_snapshot_from_tick(order.symbol, live_tick)
+            if live_tick
+            else None
+        )
+        result = await exec_engine.execute_order(
+            sim_order,
+            market=getattr(market, "value", None),
+            snapshot=snapshot,
+        )
         if result.success:
             await exec_engine.apply_filled(sim_order, result)
+            if result.quantity + 1e-6 < float(order.quantity or 0.0):
+                from backend.services.simulation.services.order_service import (
+                    SimOrderService,
+                )
+
+                await SimOrderService(db).queue_order(
+                    sim_order,
+                    "partially_filled; remainder queued for current DAY session",
+                    trading_session_date=session_decision.target_trade_date,
+                )
             # 双轨镜像：虚拟成交已生效，按开关/白名单/限额向大 QMT 补一笔真单。
             # 用独立会话（db=None），避免真单写入提前提交本周期未完成的虚拟账本；
             # mirror_virtual_fill 自身吞掉全部异常，不影响上面的虚拟成交。
@@ -556,7 +657,7 @@ class SimulationEngine:
                 user_id=user_id,
                 symbol=order.symbol,
                 side=order.side,
-                quantity=order.quantity,
+                quantity=result.quantity,
                 price=float(result.price or order.price or 0),
                 sim_order_id=str(sim_order.order_id or ""),
                 run_id=run_id,

@@ -3,7 +3,6 @@ Simulation order service.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import String, and_, cast, select
@@ -48,12 +47,28 @@ class SimOrderService:
         await self.db.refresh(order)
         # V2链路会同步写simulation_orders投影；旧链路不需要，忽略trigger等kwargs
         try:
-            await self.sync_order_projection(
+            projection = await self.sync_order_projection(
                 order, client_order_id=client_order_id
             )
+            if projection is not None:
+                projection.time_in_force = str(
+                    data.time_in_force or "DAY"
+                ).upper()
+                projection.expires_at = self._utc_naive(data.expires_at)
+                projection.trade_action = data.trade_action
+                projection.position_side = data.position_side or "long"
+                await self.db.commit()
         except Exception:
             pass
         return order
+
+    @staticmethod
+    def _utc_naive(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
 
     async def get_order(
         self, tenant_id: str, user_id: str, order_id: UUID
@@ -208,6 +223,7 @@ class SimOrderService:
                     )
                     self.db.add(proj)
                     await self.db.commit()
+                    return proj
                 except Exception as exc:
                     logging.getLogger(__name__).debug(
                         "sync_order_projection insert skipped: %s", exc
@@ -223,8 +239,10 @@ class SimOrderService:
                 if resolved_client_order_id and not existing.client_order_id:
                     existing.client_order_id = resolved_client_order_id
                 await self.db.commit()
+                return existing
         except Exception:
-            pass
+            return None
+        return None
 
     async def queue_order(self, order, message: str = "", trading_session_date=None):
         """挂单排队兼容：更新投影状态为pending，不阻塞主流程。"""
@@ -232,6 +250,48 @@ class SimOrderService:
             await self.sync_order_projection(
                 order, rejected_reason=str(message or "")[:500]
             )
+            if getattr(order, "order_id", None) is not None:
+                from backend.services.simulation.models.order_v2 import (
+                    SimulationOrderV2,
+                )
+
+                projection = (
+                    await self.db.execute(
+                        select(SimulationOrderV2)
+                        .where(SimulationOrderV2.order_id == order.order_id)
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if projection is not None:
+                    projection.status = OrderStatus.PENDING.value
+                    projection.trading_session_date = trading_session_date
+                    if (
+                        projection.expires_at is None
+                        and trading_session_date is not None
+                        and str(projection.time_in_force or "DAY").upper() == "DAY"
+                    ):
+                        from zoneinfo import ZoneInfo
+
+                        from backend.services.simulation.services.market_rules import (
+                            infer_market,
+                        )
+
+                        market = infer_market(str(projection.symbol or "")).value
+                        timezone_name = {
+                            "CN": "Asia/Shanghai",
+                            "HK": "Asia/Hong_Kong",
+                            "US": "America/New_York",
+                        }.get(market, "Asia/Shanghai")
+                        close_hour = 16 if market in {"HK", "US"} else 15
+                        local_deadline = datetime.combine(
+                            trading_session_date,
+                            datetime.min.time(),
+                            tzinfo=ZoneInfo(timezone_name),
+                        ).replace(hour=close_hour)
+                        projection.expires_at = local_deadline.astimezone(
+                            timezone.utc
+                        ).replace(tzinfo=None)
+                    await self.db.commit()
         except Exception:
             pass
 

@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI):
     tdx_l2_capture_task = None
     tdx_l2_realtime_task = None
     t1_unlock_task = None
+    simulation_pending_order_task = None
 
     try:
         await init_unified_config(service_name="quantmind-trade")
@@ -177,6 +178,14 @@ async def lifespan(app: FastAPI):
         t1_unlock_task = asyncio.create_task(
             run_simulation_t1_unlock_task(),
             name="simulation-t1-unlock",
+        )
+        from backend.services.simulation.services.pending_order_worker import (
+            run_simulation_pending_order_worker,
+        )
+
+        simulation_pending_order_task = asyncio.create_task(
+            run_simulation_pending_order_worker(),
+            name="simulation-pending-order-worker",
         )
         from backend.services.live_trading.services.risk_trigger_scanner import (
             RiskTriggerScanner,
@@ -359,7 +368,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("trade risk trigger scanner stop failed: %s", e)
 
-    for task in (scanner_task, margin_task, snapshot_task, ledger_settlement_task, manual_execution_task, sandbox_signal_task, tdx_account_sync_task, qmt_account_sync_task, qmt_exec_poller_task, mirror_queue_drainer_task, tdx_quote_feed_task, tdx_l2_capture_task, tdx_l2_realtime_task, t1_unlock_task, corp_action_task):
+    for task in (scanner_task, margin_task, snapshot_task, ledger_settlement_task, manual_execution_task, sandbox_signal_task, tdx_account_sync_task, qmt_account_sync_task, qmt_exec_poller_task, mirror_queue_drainer_task, tdx_quote_feed_task, tdx_l2_capture_task, tdx_l2_realtime_task, t1_unlock_task, simulation_pending_order_task, corp_action_task):
         if task is None:
             continue
         task.cancel()

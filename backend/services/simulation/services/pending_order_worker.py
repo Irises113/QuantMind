@@ -9,10 +9,10 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import select, update
 
 from backend.services.trade_shared.redis_client import redis_client
-from backend.services.simulation.models.order import OrderStatus
+from backend.services.simulation.models.order import OrderStatus, SimOrder
 from backend.services.simulation.models.order_v2 import SimulationOrderV2
 from backend.services.simulation.services.execution_engine import (
     SimulationExecutionEngine,
@@ -40,10 +40,6 @@ class SimulationPendingOrderWorker:
                         select(SimulationOrderV2)
                         .where(
                             SimulationOrderV2.status == OrderStatus.PENDING.value,
-                            or_(
-                                SimulationOrderV2.expires_at.is_(None),
-                                SimulationOrderV2.expires_at > datetime.now(),
-                            ),
                         )
                         .order_by(
                             SimulationOrderV2.created_at.asc(),
@@ -63,18 +59,47 @@ class SimulationPendingOrderWorker:
             engine = SimulationExecutionEngine(session, manager)
 
             for projection_order in rows:
-                runtime_order = order_service._build_runtime_order(
-                    projection_order,
-                    remarks=projection_order.rejected_reason,
+                runtime_order = (
+                    await session.execute(
+                        select(SimOrder)
+                        .where(SimOrder.order_id == projection_order.order_id)
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if runtime_order is None:
+                    logger.error(
+                        "pending projection has no legacy order: %s",
+                        projection_order.order_id,
+                    )
+                    projection_order.status = OrderStatus.REJECTED.value
+                    projection_order.rejected_reason = "legacy order missing"
+                    await session.commit()
+                    processed += 1
+                    continue
+                legacy_status = str(
+                    getattr(runtime_order.status, "value", runtime_order.status) or ""
                 )
+                if legacy_status in {
+                    OrderStatus.REJECTED.value,
+                    OrderStatus.CANCELLED.value,
+                    OrderStatus.FILLED.value,
+                }:
+                    projection_order.status = legacy_status
+                    await session.commit()
+                    processed += 1
+                    continue
                 expires_at = engine._normalize_runtime_datetime(
-                    getattr(runtime_order, "expires_at", None)
+                    getattr(projection_order, "expires_at", None)
                 )
-                if expires_at is not None and expires_at <= datetime.now():
+                now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+                if expires_at is not None and expires_at <= now_utc_naive:
                     await engine.mark_expired(
                         runtime_order,
                         "Order expired before execution",
                     )
+                    projection_order.status = "expired"
+                    projection_order.rejected_reason = "Order expired before execution"
+                    await session.commit()
                     processed += 1
                     continue
 
@@ -104,6 +129,22 @@ class SimulationPendingOrderWorker:
                         processed += 1
                     continue
 
+                claim = await session.execute(
+                    update(SimulationOrderV2)
+                    .where(
+                        SimulationOrderV2.id == projection_order.id,
+                        SimulationOrderV2.status == OrderStatus.PENDING.value,
+                    )
+                    .values(
+                        status=OrderStatus.SUBMITTED.value,
+                        rejected_reason=None,
+                    )
+                )
+                if claim.rowcount != 1:
+                    await session.rollback()
+                    continue
+                await session.commit()
+
                 # P0-1：执行+落库临界区持同用户锁，与在线下单链路互斥。
                 # 锁忙则本轮跳过（订单仍pending，下轮再扫），不静默放行。
                 try:
@@ -114,6 +155,8 @@ class SimulationPendingOrderWorker:
                 except Exception:
                     _lock_cm = None
                 if _lock_cm is None:
+                    projection_order.status = OrderStatus.PENDING.value
+                    await session.commit()
                     continue
                 try:
                     async with _lock_cm:
@@ -125,7 +168,10 @@ class SimulationPendingOrderWorker:
                         )
                         await session.commit()
 
-                        execution_result = await engine.execute_order(runtime_order)
+                        execution_result = await engine.execute_order(
+                            runtime_order,
+                            requested_quantity=float(projection_order.quantity or 0.0),
+                        )
                         if not execution_result.success:
                             if (
                                 str(execution_result.message or "")
@@ -151,6 +197,26 @@ class SimulationPendingOrderWorker:
                         await engine.apply_filled(runtime_order, execution_result)
                         processed += 1
                 except RuntimeError:
+                    projection_order.status = OrderStatus.PENDING.value
+                    await session.commit()
+                    continue
+                except Exception:
+                    await session.rollback()
+                    await session.execute(
+                        update(SimulationOrderV2)
+                        .where(
+                            SimulationOrderV2.id == projection_order.id,
+                            SimulationOrderV2.status
+                            == OrderStatus.SUBMITTED.value,
+                        )
+                        .values(status=OrderStatus.PENDING.value)
+                    )
+                    await session.commit()
+                    logger.error(
+                        "pending order execution failed: %s",
+                        projection_order.order_id,
+                        exc_info=True,
+                    )
                     continue
         return processed
 
