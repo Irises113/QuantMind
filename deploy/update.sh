@@ -204,11 +204,20 @@ build_core() {
 
     # docker-compose.yml 仅参与"build 段"签名，不再整文件比对：
     # compose 里端口/环境变量/卷等改动不影响镜像层，改动它们不应触发镜像重建。
-    # 用 grep 摘出 build 段相关的行（build/context/dockerfile/args/target/... 含 key），
-    # 对该子集取 sha256 作为签名；只保留那些真正改变镜像构建的参数。
-    build_blk="$(grep -nE 'build:|context:|dockerfile:|args:|target:|cache_from:|TORCH_DEVICE|TORCH_CPU_INDEX_URL' \
-        "$PROJECT_DIR/docker-compose.yml" 2>/dev/null | sha256sum \
-        | awk '{print $1}' | head -c 64)"
+    # 注意：
+    #   1) 禁用 grep -n —— 行号会随文件任意位置的编辑而漂移，导致签名每次都变、
+    #      每次部署白白全量重建。
+    #   2) 用 awk 只截取 quantmind 服务块，其他服务的 build 段变更不误伤本镜像。
+    #   3) build args 在 compose 里是 ${TORCH_DEVICE:-skip} 这类静态插值文本，
+    #      .env 里切 cpu/gpu 不会改变该文本，故把 TORCH_DEVICE 生效值单独计入签名。
+    local svc_blk torch_val
+    svc_blk="$(awk '/^  quantmind:/{f=1;next} f && /^  [A-Za-z0-9_-]+:/{exit} f' \
+        "$PROJECT_DIR/docker-compose.yml" 2>/dev/null || true)"
+    torch_val="${TORCH_DEVICE:-$(grep -E '^[[:space:]]*TORCH_DEVICE=' "$PROJECT_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "\"' " || true)}"
+    build_blk="$(printf '%s' "$svc_blk" \
+        | grep -aE 'build:|context:|dockerfile:|args:|target:|platform:|cache_from:|TORCH_DEVICE|TORCH_CPU_INDEX_URL' \
+        | sha256sum | awk '{print $1}')${torch_val:-skip}"
+    build_blk="$(printf '%s' "$build_blk" | sha256sum | awk '{print $1}' | head -c 64)"
     build_blk="${build_blk:-missing}"
     trigger="${trigger}docker-compose-build=${build_blk}\n"
 
