@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Brain, ChevronRight, Play, Settings2, BarChart, Database,
-  Copy, Sparkles, RefreshCcw, Target, Upload, Layers
+  Copy, Sparkles, RefreshCcw, Target, Upload, Layers, Square
 } from 'lucide-react';
 import {
   Button, Space, Tag, Typography, message, Card, Select, Modal, Alert, Tooltip
@@ -206,6 +206,7 @@ export const ModelTrainingPage: React.FC = () => {
   const [logs, setLogs] = useState<string[]>([]);
   const [result, setResult] = useState<TrainingResult | null>(null);
   const [resultError, setResultError] = useState<string>('');
+  const [activeRunId, setActiveRunId] = useState<string>('');
   const [settingDefaultModel, setSettingDefaultModel] = useState(false);
   const [draftSavedAt, setDraftSavedAt] = useState<string>('');
   const [trainingNodes, setTrainingNodes] = useState<any[]>([]);
@@ -508,6 +509,7 @@ export const ModelTrainingPage: React.FC = () => {
         payload.factor_catalog_version = factorCatalogVersion;
       }
       const { runId } = await modelTrainingService.runTraining(payload);
+      setActiveRunId(runId);
       pushLog(`提交成功，Run ID: ${runId}`);
       startPolling(runId);
     } catch (err: any) {
@@ -543,6 +545,17 @@ export const ModelTrainingPage: React.FC = () => {
       const failedByLog = /\[ERROR\].*(编排失败|训练异常退出|原生进程轮询异常)/.test(run.logs || '');
       if (liveStatuses.includes(run.status || '') && !failedByLog) {
         setProgress(Math.max(run.progress || 5, 5));
+      }
+
+      if (run.status === 'cancelled') {
+        clearTimers();
+        pushLog('训练已被取消');
+        setTrainingStatus('draft');
+        setExecutionStage('已取消');
+        setBackendRunStatus('');
+        setActiveRunId('');
+        message.info('训练已取消');
+        return;
       }
 
       if (run.isCompleted || failedByLog || run.status === 'failed') {
@@ -590,6 +603,7 @@ export const ModelTrainingPage: React.FC = () => {
       setTrainingStatus('running');
       setExecutionStage('训练进行中（已从上次会话恢复）');
       setCurrentStep(3);
+      setActiveRunId(run.runId);
       startPolling(run.runId);
     })();
     return () => {
@@ -612,6 +626,31 @@ export const ModelTrainingPage: React.FC = () => {
     setTrainingStatus('draft');
     setResult(null);
     setResultError('');
+  };
+
+  const handleCancelTraining = () => {
+    if (!activeRunId) return;
+    Modal.confirm({
+      title: '取消训练',
+      content: `确定要取消训练任务 ${activeRunId} 吗？训练容器/进程将被停止，已产出的模型不会入库。`,
+      okText: '取消训练',
+      okButtonProps: { danger: true },
+      cancelText: '继续训练',
+      onOk: async () => {
+        try {
+          await modelTrainingService.cancelTrainingRun(activeRunId);
+          clearTimers();
+          pushLog('已提交取消请求，正在停止训练…');
+          setTrainingStatus('draft');
+          setExecutionStage('已取消');
+          setBackendRunStatus('');
+          setActiveRunId('');
+          message.success('训练已取消');
+        } catch (err: any) {
+          message.error(`取消失败: ${err.message}`);
+        }
+      },
+    });
   };
 
   const handleResetAll = () => {
@@ -905,6 +944,17 @@ export const ModelTrainingPage: React.FC = () => {
                         </>
                       )}
                       <Button size="small" icon={<RefreshCcw size={14}/>} className="rounded-xl h-8 font-bold px-3" onClick={handleResetAll} disabled={isTrainingInProgress}>清空</Button>
+                      {isTrainingInProgress && (
+                        <Button
+                          size="small"
+                          danger
+                          icon={<Square size={14} />}
+                          className="rounded-xl h-8 font-bold px-4"
+                          onClick={handleCancelTraining}
+                        >
+                          取消训练
+                        </Button>
+                      )}
                       <Tooltip title={disableStartTraining ? startDisabledReason : undefined}>
                         <span className={disableStartTraining ? 'inline-block' : undefined}>
                           <Button size="small" type="primary" icon={<ChevronRight size={14}/>} className="rounded-xl h-8 bg-blue-600 font-bold px-4 shadow-sm" onClick={stepAction} disabled={disableStartTraining}>
